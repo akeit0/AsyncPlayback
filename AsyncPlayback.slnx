@@ -1,0 +1,13 @@
+<Solution>
+    <Folder Name="/sandbox/">
+        <Project Path="sandbox/ConsoleApp1/ConsoleApp1.csproj" />
+        <Project Path="sandbox/ConsoleApp2/ConsoleApp2.csproj" />
+        <Project Path="sandbox/ConsoleApp3/ConsoleApp3.csproj" />
+    </Folder>
+    <Folder Name="/src/">
+        <Project Path="src/AsyncPlayback/AsyncPlayback.csproj" />
+    </Folder>
+    <Folder Name="/tests/">
+        <Project Path="tests/AsyncPlayback.Tests/AsyncPlayback.Tests.csproj" />
+    </Folder>
+</Solution>
