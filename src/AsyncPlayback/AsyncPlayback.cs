@@ -32,6 +32,7 @@ public sealed class Playback
     private readonly Queue<Action> ready = [];
     private readonly SemaphoreSlim readySignal = new(0);
     private readonly List<TimelineRecord> records = [];
+    private readonly Dictionary<RunnerStateKey, TimelineCheckpoint> storeCheckpoints = [];
     private bool hasTimestamp;
     private int suppressAwaitPointTimestampSamplingDepth;
     private object? storedState;
@@ -82,7 +83,7 @@ public sealed class Playback
         storedState = state;
         hasStoredState = true;
 
-        CaptureStoreAtCurrentBackwardCheckpoint();
+        CaptureStoreAtCurrentState();
     }
 
     public void ClearStore()
@@ -90,18 +91,36 @@ public sealed class Playback
         EnsureStarted();
 
         ClearStoredState();
-        CaptureStoreAtCurrentBackwardCheckpoint();
+        CaptureStoreAtCurrentState();
     }
 
-    private void CaptureStoreAtCurrentBackwardCheckpoint()
+    private void CaptureStoreAtCurrentState()
     {
+        var runner = PlaybackRuntime.CurrentRunner;
+        if (runner == null)
+            return;
+
         if (
-            currentDirection == PlaybackDirection.Backward
-            && currentRecord is CheckpointTimelineRecord checkpoint
-            && checkpoint.EntryCheckpoint != null
-            && checkpoint.StartTime == Time
+            storeCheckpoints.TryGetValue(
+                new(runner, runner.CurrentStateCheckpointId),
+                out var checkpoint
+            )
         )
-            checkpoint.EntryCheckpoint.StoreSnapshot = CaptureStoreSnapshot();
+            checkpoint.ResumeStoreSnapshot = CaptureStoreSnapshot();
+    }
+
+    private void BindStoreCheckpoint(TimelineCheckpoint checkpoint)
+    {
+        BindStoreCheckpoint(checkpoint.Runner, checkpoint.CheckpointId, checkpoint);
+    }
+
+    private void BindStoreCheckpoint(
+        IPlaybackRunner runner,
+        int checkpointId,
+        TimelineCheckpoint checkpoint
+    )
+    {
+        storeCheckpoints[new(runner, checkpointId)] = checkpoint;
     }
 
     public bool TryGet<T>(out T state)
@@ -128,6 +147,22 @@ public sealed class Playback
 
         state = value;
         return true;
+    }
+
+    public T SelectByDirection<T>(T backward, T forward)
+        where T : notnull
+    {
+        EnsureStarted();
+
+        if (CurrentDirection == PlaybackDirection.Backward)
+        {
+            if (TryGet<T>(out var state))
+                return state;
+            throw new InvalidOperationException("No stored state found for backward selection.");
+        }
+
+        Store(backward);
+        return forward;
     }
 
     public IReadOnlyList<TimelineRecordInfo> GetNearestRecords(int count = 5)
@@ -185,6 +220,7 @@ public sealed class Playback
         Mode = PlaybackMode.Recording;
         playbackRecordIndex = 0;
         edgeCursor = PlaybackEdgeCursor.None;
+        storeCheckpoints.Clear();
         ResetTimestamp();
         ClearStoredState();
 
@@ -740,6 +776,7 @@ public sealed class Playback
         try
         {
             RestoreRunnerTreeTo(checkpoint.EntryCheckpoint, false);
+            RestoreResumeStoreSnapshot(checkpoint.EntryCheckpoint);
             await RunUntilIdleAsync(currentCancellationToken).ConfigureAwait(false);
             IsCompleted = false;
             currentRecord = checkpoint;
@@ -841,6 +878,7 @@ public sealed class Playback
         );
 
         record.EntryCheckpoint = checkpoint;
+        BindStoreCheckpoint(checkpoint);
     }
 
     internal CheckpointTimelineRecord GetOrCreateCheckpointRecord(string debugLabel)
@@ -922,6 +960,7 @@ public sealed class Playback
 
         // Always update: during playback the runner/checkpoint id can be rebound.
         boundary.EntryCheckpoint = checkpoint;
+        BindStoreCheckpoint(checkpoint);
     }
 
     internal CallTimelineRecord GetOrCreateCallRecord(
@@ -977,12 +1016,17 @@ public sealed class Playback
         if (ownerRecord != null)
         {
             ownerRecord.EntryCheckpoint ??= checkpoint;
+            BindStoreCheckpoint(runner, checkpointId, ownerRecord.EntryCheckpoint);
 
             if (
                 SuppressCheckpointAutoContinuation
                 && ownerRecord is CheckpointTimelineRecord checkpointRecord
             )
                 pendingForwardCheckpoint = checkpointRecord;
+        }
+        else
+        {
+            BindStoreCheckpoint(checkpoint);
         }
     }
 
@@ -1710,6 +1754,7 @@ public sealed class Playback
         try
         {
             RestoreRunnerTreeTo(checkpoint.EntryCheckpoint, reconnectParents);
+            RestoreResumeStoreSnapshot(checkpoint.EntryCheckpoint);
             currentRecord = checkpoint;
 
             await RunUntilIdleAsync(currentCancellationToken).ConfigureAwait(false);
@@ -2076,6 +2121,11 @@ public sealed class Playback
     private StoreSnapshot CaptureStoreSnapshot()
     {
         return new(hasStoredState, storedState);
+    }
+
+    private void RestoreResumeStoreSnapshot(TimelineCheckpoint checkpoint)
+    {
+        RestoreStoreSnapshot(checkpoint.ResumeStoreSnapshot ?? checkpoint.StoreSnapshot);
     }
 
     private void StartEffect(EffectRecord record, PlaybackPromiseBase promise)
@@ -2473,6 +2523,8 @@ public sealed class Playback
         PlaybackDirection Direction,
         TimelineBoundary Boundary
     );
+
+    private readonly record struct RunnerStateKey(IPlaybackRunner Runner, int CheckpointId);
 
     private enum PlaybackEdgeCursor
     {

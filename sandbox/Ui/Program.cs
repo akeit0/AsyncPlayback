@@ -91,7 +91,8 @@ async void SyncSlider(Playback playback, double value)
 
 async PlaybackTask SimulateWork(Playback playback)
 {
-    label.Text = "Work started";
+    label.Text = playback.SelectByDirection(backward: label.Text, forward: "Working...");
+
     await playback.Delay(TimeSpan.FromSeconds(0.3));
     var rect = AddRect(playback);
     await playback.Checkpoint("rectangle added");
@@ -100,7 +101,7 @@ async PlaybackTask SimulateWork(Playback playback)
         rect.Width = 510 * (1 - progress.Progress);
     }
 
-    label.Text = "Work completed";
+    label.Text = playback.SelectByDirection(backward: label.Text, forward: "End");
 }
 
 Rectangle AddRect(Playback playback)

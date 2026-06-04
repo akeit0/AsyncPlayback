@@ -318,6 +318,26 @@ public sealed class TransportStepTests
     }
 
     [Test]
+    public async Task SelectByDirection_RestoresPreviousValuesAtTerminalAndInitialSegments()
+    {
+        var events = new List<string>();
+        var playback = Playback.Start(r => SelectByDirectionScenario(r, events));
+
+        await playback.RunToEndAsync();
+        await Assert.That(Joined(events)).IsEqualTo("simulate start: Working...,simulate end: End");
+        events.Clear();
+
+        await playback.MoveToAsync(TimeSpan.Zero);
+        await Assert
+            .That(Joined(events))
+            .IsEqualTo("simulate end: Working...,simulate start: Hello, world!");
+        events.Clear();
+
+        await playback.MoveToAsync(TimeSpan.FromSeconds(1));
+        await Assert.That(Joined(events)).IsEqualTo("simulate start: Working...,simulate end: End");
+    }
+
+    [Test]
     public async Task TryStepForwardAsync_StopsAtSeekLoopStartAndEnd()
     {
         var events = new List<string>();
@@ -706,10 +726,10 @@ public sealed class TransportStepTests
         await Assert.That(restoredStates.Count).IsEqualTo(0);
 
         await StepBackAsync(playback);
-        await Assert.That(restoredStates).IsEquivalentTo([1]);
+        await Assert.That(restoredStates).IsEquivalentTo([2]);
 
         await StepBackAsync(playback);
-        await Assert.That(restoredStates).IsEquivalentTo([1, 0]);
+        await Assert.That(restoredStates).IsEquivalentTo([2, 1]);
     }
 
     [Test]
@@ -1052,6 +1072,35 @@ public sealed class TransportStepTests
         await foreach (var _ in playback.ForEachOnSeek(TimeSpan.FromSeconds(1))) { }
 
         events.Add(playback.CurrentDirection + "end");
+    }
+
+    private static async PlaybackTask SelectByDirectionScenario(
+        Playback playback,
+        List<string> events
+    )
+    {
+        var text = "Hello, world!";
+
+        text = SelectText(playback, events, "start", text, "Working...");
+        await playback.Delay(TimeSpan.FromMilliseconds(300));
+        await playback.Checkpoint("rectangle added");
+
+        await foreach (var _ in playback.ForEachOnSeek(TimeSpan.FromMilliseconds(700))) { }
+
+        text = SelectText(playback, events, "end", text, "End");
+    }
+
+    private static string SelectText(
+        Playback playback,
+        List<string> events,
+        string label,
+        string previousText,
+        string newText
+    )
+    {
+        var selected = playback.SelectByDirection(backward: previousText, forward: newText);
+        events.Add($"simulate {label}: {selected}");
+        return selected;
     }
 
     private static async PlaybackTask DirectionControlledStoreScenario(

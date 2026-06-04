@@ -38,6 +38,7 @@ internal sealed class TimelineCheckpoint
     public TimelineRecord? ResumeScope { get; }
     public int RecordCountAtCapture { get; }
     public StoreSnapshot StoreSnapshot { get; internal set; }
+    public StoreSnapshot? ResumeStoreSnapshot { get; internal set; }
     public long Timestamp { get; }
     public TimeSpan DeltaTime { get; }
 }

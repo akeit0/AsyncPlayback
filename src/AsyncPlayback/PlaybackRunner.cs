@@ -10,6 +10,7 @@ internal interface IPlaybackRunner
     IPlaybackRunner? ParentRunner { get; }
     CallTimelineRecord? CurrentCallRecord { get; }
     int ParentAwaitCheckpointId { get; }
+    int CurrentStateCheckpointId { get; }
 
     TimelineRecord? GetResumeScope(int checkpointId);
 
@@ -71,6 +72,7 @@ internal sealed class PlaybackRunner<TStateMachine> : IPlaybackRunner
     public CallTimelineRecord? CurrentCallRecord { get; private set; }
 
     public int ParentAwaitCheckpointId { get; private set; }
+    public int CurrentStateCheckpointId { get; private set; }
 
     public TimelineRecord? GetResumeScope(int checkpointId)
     {
@@ -140,6 +142,7 @@ internal sealed class PlaybackRunner<TStateMachine> : IPlaybackRunner
         }
 
         suspendedCheckpointId = 0;
+        CurrentStateCheckpointId = checkpointId;
         scopeForNextMoveNext = resumeScope;
 
         MoveNext();
@@ -173,6 +176,7 @@ internal sealed class PlaybackRunner<TStateMachine> : IPlaybackRunner
         // references into these snapshots; clearing them makes old records
         // unrestorable and can cause recursive replay attempts.
         suspendedCheckpointId = 0;
+        CurrentStateCheckpointId = 0;
         isCompleted = false;
         scopeForNextMoveNext = null;
 
