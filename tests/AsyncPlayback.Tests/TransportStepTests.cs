@@ -184,6 +184,38 @@ public sealed class TransportStepTests
     }
 
     [Test]
+    public async Task MoveToAsync_RejectsExplicitForwardDirectionForEarlierTarget()
+    {
+        var playback = Playback.Start(r => DelayScenario(r, []));
+
+        await playback.RunToEndAsync();
+
+        await Assert
+            .That(async () =>
+                await playback.MoveToAsync(
+                    TimeSpan.FromMilliseconds(500),
+                    PlaybackDirection.Forward
+                )
+            )
+            .Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task MoveToAsync_RejectsExplicitBackwardDirectionForLaterTarget()
+    {
+        var playback = Playback.Start(r => DelayScenario(r, []));
+
+        await Assert
+            .That(async () =>
+                await playback.MoveToAsync(
+                    TimeSpan.FromMilliseconds(500),
+                    PlaybackDirection.Backward
+                )
+            )
+            .Throws<ArgumentException>();
+    }
+
+    [Test]
     public async Task MoveToAsync_ReplaysTerminalEdgeAfterSeekLoopWhenMovingBackwardFromEnd()
     {
         var directions = new List<PlaybackDirection>();
@@ -352,6 +384,165 @@ public sealed class TransportStepTests
         await Assert.That(Joined(events)).IsEqualTo("end:Working...,rect:0.5");
         await Assert.That(panel.Rects.Count).IsEqualTo(1);
         await Assert.That(panel.Rects[0].Width).IsEqualTo(225);
+    }
+
+    [Test]
+    public async Task SelectByDirection_RepeatedBackwardTerminalReplayDoesNotOverwriteStoredValue()
+    {
+        var events = new List<string>();
+        var playback = Playback.Start(r => CheckpointSelectSeekLoopScenario(r, events));
+
+        await playback.RunToEndAsync();
+        await Assert.That(Joined(events)).IsEqualTo("selected:Done!");
+        events.Clear();
+
+        await playback.MoveToAsync(TimeSpan.FromMilliseconds(1500));
+        await playback.MoveToAsync(TimeSpan.FromMilliseconds(1200));
+        await playback.MoveToAsync(TimeSpan.FromMilliseconds(900));
+
+        await Assert.That(Joined(events)).IsEqualTo("selected:Running");
+    }
+
+    [Test]
+    public async Task SelectByDirection_BackwardScrubNearEndDoesNotReplayForwardTerminalRepeatedly()
+    {
+        var events = new List<string>();
+        var playback = Playback.Start(r => CheckpointSelectSeekLoopScenario(r, events));
+
+        await playback.RunToEndAsync();
+        events.Clear();
+
+        foreach (var seconds in new[] { 1.99, 1.98, 1.995, 1.97, 1.96, 1.95 })
+            await playback.MoveToAsync(TimeSpan.FromSeconds(seconds));
+
+        await Assert.That(Joined(events)).IsEqualTo("selected:Running");
+    }
+
+    [Test]
+    public async Task SelectByDirection_ForwardSamplesInsideSeekLoopDoNotReplayTerminal()
+    {
+        var events = new List<string>();
+        var playback = Playback.Start(r => CheckpointSelectSeekLoopScenario(r, events));
+
+        await playback.RunToEndAsync();
+        events.Clear();
+
+        await playback.MoveToAsync(TimeSpan.FromMilliseconds(1500));
+        events.Clear();
+
+        await playback.MoveToAsync(TimeSpan.FromMilliseconds(1600));
+        await playback.MoveToAsync(TimeSpan.FromMilliseconds(1700));
+        await playback.MoveToAsync(TimeSpan.FromMilliseconds(1800));
+        await playback.MoveToAsync(TimeSpan.FromMilliseconds(1900));
+
+        await Assert.That(Joined(events)).IsEmpty();
+    }
+
+    [Test]
+    public async Task SelectByDirection_RepeatedForwardTargetsAtEndDoNotReplayTerminal()
+    {
+        var events = new List<string>();
+        var playback = Playback.Start(r => CheckpointSelectSeekLoopScenario(r, events));
+
+        await playback.RunToEndAsync();
+        events.Clear();
+
+        await playback.MoveToAsync(TimeSpan.FromMilliseconds(1500));
+        events.Clear();
+
+        await playback.MoveToAsync(TimeSpan.FromSeconds(2));
+        await playback.MoveToAsync(TimeSpan.FromSeconds(2));
+        await playback.MoveToAsync(TimeSpan.FromSeconds(2));
+
+        await Assert.That(Joined(events)).IsEqualTo("selected:Done!");
+    }
+
+    [Test]
+    public async Task SelectByDirection_RepeatedFullRewindCyclesReplayOncePerDirection()
+    {
+        var events = new List<string>();
+        var playback = Playback.Start(r => CheckpointSelectSeekLoopScenario(r, events));
+
+        await playback.RunToEndAsync();
+        var recordCount = playback.Records.Count;
+        events.Clear();
+
+        for (var i = 0; i < 5; i++)
+        {
+            await playback.MoveToAsync(TimeSpan.Zero);
+            await Assert.That(playback.Records.Count).IsEqualTo(recordCount);
+            await playback.MoveToAsync(TimeSpan.FromSeconds(2));
+            await Assert.That(playback.Records.Count).IsEqualTo(recordCount);
+        }
+
+        await Assert
+            .That(Joined(events))
+            .IsEqualTo(
+                "selected:Running,selected:Done!,selected:Running,selected:Done!,selected:Running,selected:Done!,selected:Running,selected:Done!,selected:Running,selected:Done!"
+            );
+    }
+
+    [Test]
+    public async Task SelectByDirection_TinyCrossingsAroundSeekLoopEndReplayBothDirections()
+    {
+        var events = new List<string>();
+        var playback = Playback.Start(r => CheckpointSelectSeekLoopScenario(r, events));
+
+        await playback.RunToEndAsync();
+        events.Clear();
+
+        await playback.MoveToAsync(TimeSpan.FromMilliseconds(1999));
+        await playback.MoveToAsync(TimeSpan.FromSeconds(2));
+        await playback.MoveToAsync(TimeSpan.FromMilliseconds(1998));
+        await playback.MoveToAsync(TimeSpan.FromSeconds(2));
+
+        await Assert
+            .That(Joined(events))
+            .IsEqualTo("selected:Running,selected:Done!,selected:Running,selected:Done!");
+    }
+
+    [Test]
+    public async Task SelectByDirection_DoesNotOverwriteBackwardValueWithForwardExternalState()
+    {
+        var events = new List<string>();
+        var label = new TestLabel { Text = "Hello, world!" };
+        var poisonForwardReplay = false;
+        var playback = Playback.Start(r =>
+            ExternalLabelSelectSeekLoopScenario(r, events, label, () => poisonForwardReplay)
+        );
+
+        await playback.RunToEndAsync();
+        events.Clear();
+
+        await playback.MoveToAsync(TimeSpan.Zero);
+        events.Clear();
+
+        poisonForwardReplay = true;
+        await playback.MoveToAsync(TimeSpan.FromSeconds(2));
+        await playback.MoveToAsync(TimeSpan.FromMilliseconds(1990));
+
+        await Assert
+            .That(Joined(events))
+            .IsEqualTo("selected:Done!:Forward,selected:Running:Backward");
+    }
+
+    [Test]
+    public async Task SelectByDirection_RemainsStableAfterRepeatedFullReplays()
+    {
+        var events = new List<string>();
+        var playback = Playback.Start(r => CheckpointSelectSeekLoopScenario(r, events));
+
+        await playback.RunToEndAsync();
+        await playback.MoveToAsync(TimeSpan.Zero);
+        await playback.MoveToAsync(TimeSpan.FromSeconds(2));
+        await playback.MoveToAsync(TimeSpan.Zero);
+        await playback.MoveToAsync(TimeSpan.FromSeconds(2));
+        events.Clear();
+
+        foreach (var seconds in new[] { 1.99, 1.8, 1.6, 1.4 })
+            await playback.MoveToAsync(TimeSpan.FromSeconds(seconds));
+
+        await Assert.That(Joined(events)).IsEqualTo("selected:Running");
     }
 
     [Test]
@@ -1188,6 +1379,50 @@ public sealed class TransportStepTests
         events.Add("end:" + text);
     }
 
+    private static async PlaybackTask CheckpointSelectSeekLoopScenario(
+        Playback playback,
+        List<string> events
+    )
+    {
+        var text = "Hello, world!";
+
+        await playback.Checkpoint();
+        text = playback.CurrentDirection == PlaybackDirection.Forward ? "Running" : text;
+        await playback.Delay(TimeSpan.FromSeconds(1));
+
+        await foreach (var _ in playback.ForEachOnSeek(TimeSpan.FromSeconds(1))) { }
+
+        text = playback.SelectByDirection(backwardStore: text, forward: "Done!");
+        events.Add("selected:" + text);
+    }
+
+    private static async PlaybackTask ExternalLabelSelectSeekLoopScenario(
+        Playback playback,
+        List<string> events,
+        TestLabel label,
+        Func<bool>? poisonForwardBeforeSelect = null
+    )
+    {
+        var initialText = label.Text;
+
+        await playback.Checkpoint();
+        label.Text =
+            playback.CurrentDirection == PlaybackDirection.Forward ? "Running" : initialText;
+        await playback.Delay(TimeSpan.FromSeconds(1));
+
+        await foreach (var _ in playback.ForEachOnSeek(TimeSpan.FromSeconds(1))) { }
+
+        if (
+            playback.CurrentDirection == PlaybackDirection.Forward
+            && poisonForwardBeforeSelect?.Invoke() == true
+        )
+            label.Text = "Done!";
+
+        var selected = playback.SelectByDirection(backwardStore: label.Text, forward: "Done!");
+        events.Add($"selected:{selected}:{playback.CurrentDirection}");
+        label.Text = selected;
+    }
+
     private static TestRect AddTestRect(Playback playback, List<string> events, TestPanel panel)
     {
         if (playback.CurrentDirection == PlaybackDirection.Forward)
@@ -1207,6 +1442,11 @@ public sealed class TransportStepTests
     private sealed class TestPanel
     {
         public List<TestRect> Rects { get; } = [];
+    }
+
+    private sealed class TestLabel
+    {
+        public string Text { get; set; } = "";
     }
 
     private sealed class TestRect

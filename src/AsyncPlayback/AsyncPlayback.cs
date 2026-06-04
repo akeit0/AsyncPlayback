@@ -96,16 +96,39 @@ public sealed class Playback
 
     private void CaptureStoreAtCurrentState()
     {
+        if (TryGetCurrentStoreCheckpoint(out var checkpoint))
+            checkpoint.ResumeStoreSnapshot = CaptureStoreSnapshot();
+    }
+
+    private bool TryGetCurrentStoreCheckpoint(out TimelineCheckpoint checkpoint)
+    {
         var runner = PlaybackRuntime.CurrentRunner;
         if (runner == null)
-            return;
+        {
+            checkpoint = null!;
+            return false;
+        }
 
-        if (
-            storeCheckpoints.TryGetValue(
-                new(runner, runner.CurrentStateCheckpointId),
-                out var checkpoint
-            )
-        )
+        return storeCheckpoints.TryGetValue(
+            new(runner, runner.CurrentStateCheckpointId),
+            out checkpoint!
+        );
+    }
+
+    private void StoreAtCurrentStateIfMissing<T>(T state)
+        where T : notnull
+    {
+        var hasCheckpoint = TryGetCurrentStoreCheckpoint(out var checkpoint);
+        if (hasCheckpoint && checkpoint.ResumeStoreSnapshot != null)
+        {
+            RestoreStoreSnapshot(checkpoint.ResumeStoreSnapshot);
+            return;
+        }
+
+        storedState = state;
+        hasStoredState = true;
+
+        if (hasCheckpoint)
             checkpoint.ResumeStoreSnapshot = CaptureStoreSnapshot();
     }
 
@@ -161,7 +184,7 @@ public sealed class Playback
             throw new InvalidOperationException("No stored state found for backward selection.");
         }
 
-        Store(backwardStore);
+        StoreAtCurrentStateIfMissing(backwardStore);
         return forward;
     }
 
@@ -871,13 +894,13 @@ public sealed class Playback
             PlaybackPromiseKind.Checkpoint,
             null,
             parentRecord,
-            records.Count,
+            playbackRecordIndex,
             CaptureStoreSnapshot(),
             Timestamp,
             DeltaTime
         );
 
-        record.EntryCheckpoint = checkpoint;
+        SetEntryCheckpoint(record, checkpoint);
         BindStoreCheckpoint(checkpoint);
     }
 
@@ -952,14 +975,14 @@ public sealed class Playback
             PlaybackPromiseKind.Checkpoint,
             null,
             resumeScope,
-            records.Count,
+            playbackRecordIndex,
             CaptureStoreSnapshot(),
             Timestamp,
             DeltaTime
         );
 
         // Always update: during playback the runner/checkpoint id can be rebound.
-        boundary.EntryCheckpoint = checkpoint;
+        SetEntryCheckpoint(boundary, checkpoint);
         BindStoreCheckpoint(checkpoint);
     }
 
@@ -1007,7 +1030,7 @@ public sealed class Playback
             awaitKind,
             awaitedPromise,
             resumeScope,
-            records.Count,
+            playbackRecordIndex,
             CaptureStoreSnapshot(),
             Timestamp,
             DeltaTime
@@ -1015,7 +1038,7 @@ public sealed class Playback
 
         if (ownerRecord != null)
         {
-            ownerRecord.EntryCheckpoint = checkpoint;
+            SetEntryCheckpoint(ownerRecord, checkpoint);
             BindStoreCheckpoint(checkpoint);
 
             if (
@@ -1056,6 +1079,12 @@ public sealed class Playback
                 edgeCursor = PlaybackEdgeCursor.AfterLast;
             }
         }
+    }
+
+    private static void SetEntryCheckpoint(TimelineRecord record, TimelineCheckpoint checkpoint)
+    {
+        checkpoint.ResumeStoreSnapshot = record.EntryCheckpoint?.ResumeStoreSnapshot;
+        record.EntryCheckpoint = checkpoint;
     }
 
     internal void OnRunnerFaulted(IPlaybackRunner runner, Exception exception)
@@ -1110,6 +1139,21 @@ public sealed class Playback
         }
 
         var direction = directionOverride ?? InferTransportDirection(targetTime);
+
+        if (directionOverride != null)
+        {
+            if (targetTime < Time && direction == PlaybackDirection.Forward)
+                throw new ArgumentException(
+                    "Forward transport cannot target an earlier time. Omit the direction or use Backward.",
+                    "direction"
+                );
+
+            if (targetTime > Time && direction == PlaybackDirection.Backward)
+                throw new ArgumentException(
+                    "Backward transport cannot target a later time. Omit the direction or use Forward.",
+                    "direction"
+                );
+        }
 
         currentDirection = direction;
 
