@@ -1,0 +1,16 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <TargetFramework>net11.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+        <MewUIBackend>Direct2D</MewUIBackend>
+        <Nullable>enable</Nullable>
+    </PropertyGroup>
+    <ItemGroup>
+        <PackageReference Include="Aprillz.MewUI.Core" Version="0.15.2" />
+        <PackageReference Include="Aprillz.MewUI.Platform.Win32" Version="0.15.2" />
+        <PackageReference Include="Aprillz.MewUI.Backend.Gdi" Version="0.15.2" />
+        <ProjectReference Include="..\..\src\AsyncPlayback\AsyncPlayback.csproj" />
+    </ItemGroup>
+</Project>

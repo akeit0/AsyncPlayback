@@ -45,6 +45,7 @@ public sealed class Playback
     private int pendingExternalEffects;
     private int playbackRecordIndex;
     private bool hasStoredState;
+    private PlaybackEdgeCursor edgeCursor;
     private CancellationToken currentCancellationToken;
     private PlaybackDirection currentDirection = PlaybackDirection.Forward;
 
@@ -183,6 +184,7 @@ public sealed class Playback
         Time = TimeSpan.Zero;
         Mode = PlaybackMode.Recording;
         playbackRecordIndex = 0;
+        edgeCursor = PlaybackEdgeCursor.None;
         ResetTimestamp();
         ClearStoredState();
 
@@ -379,7 +381,12 @@ public sealed class Playback
         if (target < TimeSpan.Zero)
             target = TimeSpan.Zero;
 
-        return TransportToAsync(target, options, null, cancellationToken);
+        var direction =
+            virtualDelta < TimeSpan.Zero ? PlaybackDirection.Backward
+            : virtualDelta > TimeSpan.Zero ? PlaybackDirection.Forward
+            : (PlaybackDirection?)null;
+
+        return TransportToAsync(target, options, direction, cancellationToken);
     }
 
     public ValueTask AdvanceByElapsedTimeAsync(CancellationToken cancellationToken = default)
@@ -424,6 +431,25 @@ public sealed class Playback
     )
     {
         return TransportToAsync(targetTime, options, null, cancellationToken);
+    }
+
+    public ValueTask MoveToAsync(
+        TimeSpan targetTime,
+        PlaybackDirection direction,
+        CancellationToken cancellationToken = default
+    )
+    {
+        return MoveToAsync(targetTime, direction, TransportOptions.Traverse, cancellationToken);
+    }
+
+    public ValueTask MoveToAsync(
+        TimeSpan targetTime,
+        PlaybackDirection direction,
+        TransportOptions options,
+        CancellationToken cancellationToken = default
+    )
+    {
+        return TransportToAsync(targetTime, options, direction, cancellationToken);
     }
 
     public ValueTask SeekToAsync(TimeSpan targetTime, CancellationToken cancellationToken = default)
@@ -476,9 +502,27 @@ public sealed class Playback
         currentDirection = direction;
         using var cancellationScope = PushCancellationToken(cancellationToken);
 
+        if (direction == PlaybackDirection.Forward && edgeCursor == PlaybackEdgeCursor.AfterLast)
+            return CreateStepResult(false, null);
+
         AwaitPoint capturedAwaitPoint = default;
+        var initialEdgeEvaluated = false;
+        var terminalEdgeEvaluated = false;
 
         if (direction == PlaybackDirection.Forward)
+        {
+            var initialEdge = await TryEvaluateInitialForwardEdgeAsync(
+                    direction,
+                    granularity,
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+
+            initialEdgeEvaluated = initialEdge.Moved;
+            capturedAwaitPoint = initialEdge.AwaitPoint;
+        }
+
+        if (direction == PlaybackDirection.Forward && !capturedAwaitPoint.Stopped)
             capturedAwaitPoint = await RunUntilNextAwaitPointAsync(
                     direction,
                     granularity,
@@ -525,9 +569,18 @@ public sealed class Playback
             }
         }
 
+        if (direction == PlaybackDirection.Backward)
+            terminalEdgeEvaluated = await TryEvaluateTerminalBackwardEdgeAsync()
+                .ConfigureAwait(false);
+
         var boundary = FindStepBoundary(direction, granularity);
         if (boundary == null)
-            return CreateStepResult(false, null);
+        {
+            if (direction == PlaybackDirection.Backward && Time == TimeSpan.Zero)
+                RestoreToInitial(postReady: false);
+
+            return CreateStepResult(initialEdgeEvaluated || terminalEdgeEvaluated, null);
+        }
 
         await EvaluateStepBoundaryAsync(boundary.Value, direction).ConfigureAwait(false);
 
@@ -567,6 +620,23 @@ public sealed class Playback
 
             await readySignal.WaitAsync(cancellationToken).ConfigureAwait(false);
         }
+    }
+
+    private PlaybackDirection InferTransportDirection(TimeSpan targetTime)
+    {
+        if (targetTime > Time)
+            return PlaybackDirection.Forward;
+
+        if (targetTime < Time)
+            return PlaybackDirection.Backward;
+
+        if (IsCompleted)
+            return PlaybackDirection.Backward;
+
+        if (IsBeforeFirstEdge())
+            return PlaybackDirection.Forward;
+
+        return currentDirection;
     }
 
     private async ValueTask<AwaitPoint> RunUntilNextAwaitPointAsync(
@@ -622,6 +692,73 @@ public sealed class Playback
     {
         lock (readyGate)
             return ready.Count != 0;
+    }
+
+    private async ValueTask<InitialEdgeResult> TryEvaluateInitialForwardEdgeAsync(
+        PlaybackDirection direction,
+        PlaybackStepGranularity granularity,
+        CancellationToken cancellationToken
+    )
+    {
+        if (!IsBeforeFirstEdge())
+            return default;
+
+        RestoreToInitial(postReady: true);
+        var awaitPoint = await RunUntilNextAwaitPointAsync(
+                direction,
+                granularity,
+                cancellationToken
+            )
+            .ConfigureAwait(false);
+
+        return new(true, awaitPoint);
+    }
+
+    private bool IsBeforeFirstEdge()
+    {
+        return edgeCursor == PlaybackEdgeCursor.BeforeFirst
+            && Time == TimeSpan.Zero
+            && rootRunner != null
+            && !HasReady();
+    }
+
+    private async ValueTask<bool> TryEvaluateTerminalBackwardEdgeAsync()
+    {
+        if (edgeCursor != PlaybackEdgeCursor.AfterLast)
+            return false;
+
+        var checkpoint = FindTerminalEdgeCheckpointRecord();
+        if (checkpoint?.EntryCheckpoint == null)
+            return false;
+
+        edgeCursor = PlaybackEdgeCursor.None;
+
+        var previousSuppress = suppressImplicitCallContinuationBoundary;
+        suppressImplicitCallContinuationBoundary = true;
+        PushSuppressCheckpointAutoContinuation();
+
+        try
+        {
+            RestoreRunnerTreeTo(checkpoint.EntryCheckpoint, false);
+            await RunUntilIdleAsync(currentCancellationToken).ConfigureAwait(false);
+            IsCompleted = false;
+            currentRecord = checkpoint;
+            return true;
+        }
+        finally
+        {
+            PopSuppressCheckpointAutoContinuation();
+            suppressImplicitCallContinuationBoundary = previousSuppress;
+        }
+    }
+
+    private CheckpointTimelineRecord? FindTerminalEdgeCheckpointRecord()
+    {
+        for (var i = records.Count - 1; i >= 0; i--)
+            if (records[i] is CheckpointTimelineRecord { EntryCheckpoint: not null } checkpoint)
+                return checkpoint;
+
+        return null;
     }
 
     internal void Post(Action action)
@@ -863,7 +1000,18 @@ public sealed class Playback
         }
 
         if (ReferenceEquals(runner, rootRunner))
-            IsCompleted = true;
+        {
+            if (currentDirection == PlaybackDirection.Backward)
+            {
+                IsCompleted = false;
+                edgeCursor = PlaybackEdgeCursor.None;
+            }
+            else
+            {
+                IsCompleted = true;
+                edgeCursor = PlaybackEdgeCursor.AfterLast;
+            }
+        }
     }
 
     internal void OnRunnerFaulted(IPlaybackRunner runner, Exception exception)
@@ -911,25 +1059,67 @@ public sealed class Playback
                 "Target time must be non-negative."
             );
 
-        var direction =
-            directionOverride
-            ?? (targetTime >= Time ? PlaybackDirection.Forward : PlaybackDirection.Backward);
+        if (directionOverride == null && targetTime == Time)
+        {
+            TargetTime = Time;
+            return;
+        }
+
+        var direction = directionOverride ?? InferTransportDirection(targetTime);
 
         currentDirection = direction;
 
-        await RunReadyAsync(cancellationToken).ConfigureAwait(false);
+        if (
+            direction == PlaybackDirection.Forward
+            && edgeCursor == PlaybackEdgeCursor.AfterLast
+            && targetTime >= Time
+        )
+        {
+            TargetTime = Time;
+            return;
+        }
+
+        var edgeEvaluated = false;
+        if (direction == PlaybackDirection.Forward)
+        {
+            var initialEdge = await TryEvaluateInitialForwardEdgeAsync(
+                    direction,
+                    PlaybackStepGranularity.AwaitPoint,
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+
+            edgeEvaluated = initialEdge.Moved;
+
+            await RunReadyAsync(cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            await RunReadyAsync(cancellationToken).ConfigureAwait(false);
+            edgeEvaluated = await TryEvaluateTerminalBackwardEdgeAsync().ConfigureAwait(false);
+        }
 
         TargetTime = targetTime;
+
+        if (edgeEvaluated && targetTime == Time)
+            return;
 
         if (options.Evaluation == TransportEvaluation.Traverse)
         {
             await TraverseToAsync(targetTime, direction, options.EvaluateTarget, cancellationToken)
                 .ConfigureAwait(false);
+
+            if (direction == PlaybackDirection.Backward && Time == TimeSpan.Zero)
+                RestoreToInitial(postReady: false);
+
             return;
         }
 
         await EvaluateTargetOnlyAsync(targetTime, direction, options.EvaluateTarget)
             .ConfigureAwait(false);
+
+        if (direction == PlaybackDirection.Backward && Time == TimeSpan.Zero)
+            RestoreToInitial(postReady: false);
     }
 
     private TimelineBoundary? FindStepBoundary(
@@ -1259,13 +1449,29 @@ public sealed class Playback
             await EvaluateAtAsync(boundary.Value.Time, direction, true).ConfigureAwait(false);
             await RunReadyAsync(cancellationToken).ConfigureAwait(false);
 
+            if (
+                direction == PlaybackDirection.Forward
+                && edgeCursor == PlaybackEdgeCursor.AfterLast
+            )
+                return;
+
             if (Time == targetTime)
                 return;
         }
 
         if (evaluateTarget)
+        {
             if (await EvaluateAtAsync(targetTime, direction, true).ConfigureAwait(false))
+            {
+                if (
+                    direction == PlaybackDirection.Forward
+                    && edgeCursor == PlaybackEdgeCursor.AfterLast
+                )
+                    return;
+
                 return;
+            }
+        }
 
         MoveToTimelineGap(targetTime);
     }
@@ -1774,6 +1980,7 @@ public sealed class Playback
         pendingForwardCheckpoint = null;
 
         MoveTimeTo(targetTime);
+        edgeCursor = PlaybackEdgeCursor.None;
 
         var nearest = FindNearestRecordAtOrBefore(targetTime);
         currentRecord = nearest;
@@ -1829,6 +2036,7 @@ public sealed class Playback
         playbackRecordIndex = target.RecordCountAtCapture;
         Mode = PlaybackMode.Playback;
         IsCompleted = false;
+        edgeCursor = PlaybackEdgeCursor.None;
         RestoreStoreSnapshot(target.StoreSnapshot);
 
         var chain = BuildRunnerChain(target.Runner);
@@ -1990,7 +2198,7 @@ public sealed class Playback
         return chain;
     }
 
-    private void RestoreToInitial()
+    private void RestoreToInitial(bool postReady)
     {
         if (rootRunner == null)
             throw new InvalidOperationException("Root runner has not been created.");
@@ -2009,13 +2217,16 @@ public sealed class Playback
         playbackRecordIndex = GetInitialPlaybackIndex();
         currentRecord = null;
         IsCompleted = false;
+        edgeCursor = postReady ? PlaybackEdgeCursor.None : PlaybackEdgeCursor.BeforeFirst;
         Mode = records.Count == 0 ? PlaybackMode.Recording : PlaybackMode.Playback;
         RestoreStoreSnapshot(null);
 
         rootRunner.RestoreInitialCheckpoint();
 
         MoveTimeTo(TimeSpan.Zero);
-        Post(rootRunner.MoveNext);
+
+        if (postReady)
+            Post(rootRunner.MoveNext);
     }
 
     private int GetInitialPlaybackIndex()
@@ -2179,7 +2390,7 @@ public sealed class Playback
         Time = time;
     }
 
-    private void ResetTimestamp()
+    public void ResetTimestamp()
     {
         timestamp = TimeProvider.GetTimestamp();
         DeltaTime = TimeSpan.Zero;
@@ -2262,6 +2473,15 @@ public sealed class Playback
         PlaybackDirection Direction,
         TimelineBoundary Boundary
     );
+
+    private enum PlaybackEdgeCursor
+    {
+        None,
+        BeforeFirst,
+        AfterLast,
+    }
+
+    private readonly record struct InitialEdgeResult(bool Moved, AwaitPoint AwaitPoint);
 
     private readonly record struct AwaitPoint(bool Stopped, TimelineBoundary? Boundary);
 

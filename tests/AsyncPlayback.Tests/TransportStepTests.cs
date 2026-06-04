@@ -76,6 +76,248 @@ public sealed class TransportStepTests
     }
 
     [Test]
+    public async Task CurrentDirection_IsBackwardWhileReplayingTerminalEdge()
+    {
+        var directions = new List<PlaybackDirection>();
+        var playback = Playback.Start(r => TerminalEdgeDirectionScenario(r, directions));
+
+        await playback.RunToEndAsync();
+        await Assert.That(directions).IsEquivalentTo([PlaybackDirection.Forward]);
+
+        directions.Clear();
+        await StepBackAsync(playback);
+
+        await Assert.That(directions).IsEquivalentTo([PlaybackDirection.Backward]);
+    }
+
+    [Test]
+    public async Task MoveToAsync_IsNoOpAtSameTimeFromTerminalEdge()
+    {
+        var directions = new List<PlaybackDirection>();
+        var playback = Playback.Start(r => TerminalEdgeDirectionScenario(r, directions));
+
+        await playback.RunToEndAsync();
+        directions.Clear();
+
+        await playback.MoveToAsync(TimeSpan.Zero);
+
+        await Assert.That(directions).IsEmpty();
+    }
+
+    [Test]
+    public async Task CurrentDirection_IsForwardWhileReplayingInitialEdge()
+    {
+        var directions = new List<PlaybackDirection>();
+        var playback = Playback.Start(r => InitialEdgeDirectionScenario(r, directions));
+
+        await playback.RunToEndAsync();
+        directions.Clear();
+
+        await playback.RunBackToStartAsync();
+        directions.Clear();
+
+        await StepForwardAsync(playback);
+
+        await Assert.That(directions).IsEquivalentTo([PlaybackDirection.Forward]);
+    }
+
+    [Test]
+    public async Task CurrentDirection_IsBackwardWhileReplayingInitialEdge()
+    {
+        var directions = new List<PlaybackDirection>();
+        var playback = Playback.Start(r => InitialEdgeDirectionScenario(r, directions));
+
+        await playback.RunToEndAsync();
+        directions.Clear();
+
+        await playback.RunBackToStartAsync();
+
+        await Assert.That(directions).IsEquivalentTo([PlaybackDirection.Backward]);
+    }
+
+    [Test]
+    public async Task MoveToAsync_IsNoOpAtSameTimeFromInitialEdge()
+    {
+        var directions = new List<PlaybackDirection>();
+        var playback = Playback.Start(r => InitialEdgeDirectionScenario(r, directions));
+
+        await playback.RunToEndAsync();
+        directions.Clear();
+
+        await playback.RunBackToStartAsync();
+        directions.Clear();
+
+        await playback.MoveToAsync(TimeSpan.Zero);
+
+        await Assert.That(directions).IsEmpty();
+    }
+
+    [Test]
+    public async Task MoveToAsync_CanUseExplicitDirectionForSameTimeEdge()
+    {
+        var directions = new List<PlaybackDirection>();
+        var playback = Playback.Start(r => TerminalEdgeDirectionScenario(r, directions));
+
+        await playback.RunToEndAsync();
+        directions.Clear();
+
+        await playback.MoveToAsync(TimeSpan.Zero, PlaybackDirection.Backward);
+
+        await Assert.That(directions).IsEquivalentTo([PlaybackDirection.Backward]);
+    }
+
+    [Test]
+    public async Task MoveToAsync_CanUseExplicitForwardDirectionForSameTimeInitialEdge()
+    {
+        var directions = new List<PlaybackDirection>();
+        var playback = Playback.Start(r => InitialEdgeDirectionScenario(r, directions));
+
+        await playback.RunToEndAsync();
+        directions.Clear();
+
+        await playback.RunBackToStartAsync();
+        directions.Clear();
+
+        await playback.MoveToAsync(TimeSpan.Zero, PlaybackDirection.Forward);
+
+        await Assert.That(directions).IsEquivalentTo([PlaybackDirection.Forward]);
+    }
+
+    [Test]
+    public async Task MoveToAsync_ReplaysTerminalEdgeAfterSeekLoopWhenMovingBackwardFromEnd()
+    {
+        var directions = new List<PlaybackDirection>();
+        var playback = Playback.Start(r => SeekLoopTerminalEdgeScenario(r, directions));
+
+        await playback.RunToEndAsync();
+        await Assert.That(directions).IsEquivalentTo([PlaybackDirection.Forward]);
+        directions.Clear();
+
+        await playback.MoveToAsync(TimeSpan.Zero);
+
+        await Assert.That(directions).IsEquivalentTo([PlaybackDirection.Backward]);
+    }
+
+    [Test]
+    public async Task MoveToAsync_ReplaysTerminalEdgeAfterSeekLoopWhenMovingBackwardIntoLoop()
+    {
+        var directions = new List<PlaybackDirection>();
+        var playback = Playback.Start(r => SeekLoopTerminalEdgeScenario(r, directions));
+
+        await playback.RunToEndAsync();
+        directions.Clear();
+
+        await playback.MoveToAsync(TimeSpan.FromSeconds(0.5));
+
+        await Assert.That(directions).IsEquivalentTo([PlaybackDirection.Backward]);
+    }
+
+    [Test]
+    public async Task MoveToAsync_ReplaysTerminalEdgeAfterRealtimeSeekLoopCompletion()
+    {
+        var timeProvider = new FakeTimeProvider();
+        var directions = new List<PlaybackDirection>();
+        var playback = Playback.Start(
+            r => SeekLoopTerminalEdgeScenario(r, directions),
+            timeProvider
+        );
+
+        timeProvider.Advance(TimeSpan.FromSeconds(1));
+        await playback.AdvanceByElapsedTimeAsync();
+        await playback.RunToEndAsync();
+        directions.Clear();
+
+        await playback.MoveToAsync(TimeSpan.FromSeconds(0.5));
+
+        await Assert.That(directions).IsEquivalentTo([PlaybackDirection.Backward]);
+    }
+
+    [Test]
+    public async Task MoveToAsync_ReplaysTerminalEdgeAfterRealtimeSeekLoopOvershootsEnd()
+    {
+        var timeProvider = new FakeTimeProvider();
+        var events = new List<string>();
+        var playback = Playback.Start(r => UiLikeSeekLoopScenario(r, events), timeProvider);
+
+        timeProvider.Advance(TimeSpan.FromSeconds(1.05));
+        await playback.AdvanceByElapsedTimeAsync();
+        await Assert.That(Joined(events)).IsEqualTo("Forwardstart,Forwardmiddle,Forwardend");
+        await Assert.That(playback.Time).IsEqualTo(TimeSpan.FromSeconds(1));
+        events.Clear();
+
+        await playback.MoveToAsync(TimeSpan.FromSeconds(0.5));
+
+        await Assert.That(Joined(events)).IsEqualTo("Backwardend");
+    }
+
+    [Test]
+    public async Task TryStepForwardAsync_DoesNotReplaySeekLoopTerminalEdgeAfterRealtimeCompletion()
+    {
+        var timeProvider = new FakeTimeProvider();
+        var directions = new List<PlaybackDirection>();
+        var playback = Playback.Start(
+            r => SeekLoopTerminalEdgeScenario(r, directions),
+            timeProvider
+        );
+
+        timeProvider.Advance(TimeSpan.FromSeconds(1));
+        await playback.AdvanceByElapsedTimeAsync();
+        directions.Clear();
+
+        var result = await playback.TryStepForwardAsync();
+
+        await Assert.That(result.Moved).IsFalse();
+        await Assert.That(directions).IsEmpty();
+    }
+
+    [Test]
+    public async Task MoveToAsync_PastEndPreservesSeekLoopTerminalEdgeForBackwardMove()
+    {
+        var directions = new List<PlaybackDirection>();
+        var playback = Playback.Start(r => SeekLoopTerminalEdgeScenario(r, directions));
+
+        await playback.RunToEndAsync();
+        directions.Clear();
+
+        await playback.MoveToAsync(TimeSpan.FromSeconds(1.05));
+        await playback.MoveToAsync(TimeSpan.FromSeconds(0.5));
+
+        await Assert.That(directions).IsEquivalentTo([PlaybackDirection.Backward]);
+    }
+
+    [Test]
+    public async Task MoveToAsync_RepeatedSameTimeAtStartDoesNotReplayInitialEdge()
+    {
+        var events = new List<string>();
+        var playback = Playback.Start(r => UiLikeSeekLoopScenario(r, events));
+
+        await playback.RunToEndAsync();
+        events.Clear();
+
+        await playback.MoveToAsync(TimeSpan.Zero);
+        await playback.MoveToAsync(TimeSpan.Zero);
+
+        await Assert.That(Joined(events)).IsEqualTo("Backwardend,Backwardmiddle,Backwardstart");
+    }
+
+    [Test]
+    public async Task MoveToAsync_ForwardFromStartReplaysSameTimeCheckpointContinuations()
+    {
+        var events = new List<string>();
+        var playback = Playback.Start(r => UiLikeSeekLoopScenario(r, events));
+
+        await playback.RunToEndAsync();
+        events.Clear();
+
+        await playback.MoveToAsync(TimeSpan.Zero);
+        events.Clear();
+
+        await playback.MoveToAsync(TimeSpan.FromSeconds(1));
+
+        await Assert.That(Joined(events)).IsEqualTo("Forwardstart,Forwardmiddle,Forwardend");
+    }
+
+    [Test]
     public async Task TryStepForwardAsync_StopsAtSeekLoopStartAndEnd()
     {
         var events = new List<string>();
@@ -770,6 +1012,46 @@ public sealed class TransportStepTests
             directions.Add(playback.CurrentDirection);
             await playback.Checkpoint();
         }
+    }
+
+    private static async PlaybackTask TerminalEdgeDirectionScenario(
+        Playback playback,
+        List<PlaybackDirection> directions
+    )
+    {
+        await playback.Checkpoint("edge");
+        directions.Add(playback.CurrentDirection);
+    }
+
+    private static async PlaybackTask InitialEdgeDirectionScenario(
+        Playback playback,
+        List<PlaybackDirection> directions
+    )
+    {
+        directions.Add(playback.CurrentDirection);
+        await playback.Checkpoint("edge");
+    }
+
+    private static async PlaybackTask SeekLoopTerminalEdgeScenario(
+        Playback playback,
+        List<PlaybackDirection> directions
+    )
+    {
+        await foreach (var _ in playback.ForEachOnSeek(TimeSpan.FromSeconds(1))) { }
+
+        directions.Add(playback.CurrentDirection);
+    }
+
+    private static async PlaybackTask UiLikeSeekLoopScenario(Playback playback, List<string> events)
+    {
+        events.Add(playback.CurrentDirection + "start");
+        await playback.Checkpoint("start work");
+        events.Add(playback.CurrentDirection + "middle");
+        await playback.Checkpoint("rectangle added");
+
+        await foreach (var _ in playback.ForEachOnSeek(TimeSpan.FromSeconds(1))) { }
+
+        events.Add(playback.CurrentDirection + "end");
     }
 
     private static async PlaybackTask DirectionControlledStoreScenario(
