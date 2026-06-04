@@ -338,6 +338,68 @@ public sealed class TransportStepTests
     }
 
     [Test]
+    public async Task SelectByDirection_DoesNotBreakBackwardSeekLoopBody()
+    {
+        var events = new List<string>();
+        var panel = new TestPanel();
+        var playback = Playback.Start(r => SelectAndSeekLoopScenario(r, events, panel));
+
+        await playback.RunToEndAsync();
+        events.Clear();
+
+        await playback.MoveToAsync(TimeSpan.FromMilliseconds(1650));
+
+        await Assert.That(Joined(events)).IsEqualTo("end:Working...,rect:0.5");
+        await Assert.That(panel.Rects.Count).IsEqualTo(1);
+        await Assert.That(panel.Rects[0].Width).IsEqualTo(225);
+    }
+
+    [Test]
+    public async Task SelectByDirection_DoesNotBreakRepeatedBackwardSeekLoopSamples()
+    {
+        var events = new List<string>();
+        var panel = new TestPanel();
+        var playback = Playback.Start(r => SelectAndSeekLoopScenario(r, events, panel));
+
+        await playback.RunToEndAsync();
+        events.Clear();
+
+        await playback.MoveToAsync(TimeSpan.FromMilliseconds(2700));
+        await playback.MoveToAsync(TimeSpan.FromMilliseconds(2100));
+        await playback.MoveToAsync(TimeSpan.FromMilliseconds(1500));
+
+        await Assert.That(panel.Rects.Count).IsEqualTo(1);
+        await Assert.That(panel.Rects[0].Width).IsEqualTo(250);
+        await Assert.That(Joined(events)).Contains("rect:0.889");
+        await Assert.That(Joined(events)).Contains("rect:0.667");
+        await Assert.That(Joined(events)).Contains("rect:0.444");
+    }
+
+    [Test]
+    public async Task SeekLoopBackwardUsesCurrentRunStateAfterReplayingForwardAgain()
+    {
+        var events = new List<string>();
+        var panel = new TestPanel();
+        var playback = Playback.Start(r => SelectAndSeekLoopScenario(r, events, panel));
+
+        await playback.RunToEndAsync();
+        await playback.MoveToAsync(TimeSpan.Zero);
+        events.Clear();
+
+        await playback.MoveToAsync(TimeSpan.FromSeconds(3));
+        await Assert.That(panel.Rects.Count).IsEqualTo(1);
+        var secondRunRect = panel.Rects[0];
+        events.Clear();
+
+        await playback.MoveToAsync(TimeSpan.FromMilliseconds(1650));
+
+        await Assert.That(panel.Rects.Count).IsEqualTo(1);
+        await Assert.That(ReferenceEquals(panel.Rects[0], secondRunRect)).IsTrue();
+        await Assert.That(secondRunRect.Width).IsEqualTo(225);
+        await Assert.That(Joined(events)).IsEqualTo("end:Working...,rect:0.5");
+    }
+
+    [Test]
     public async Task TryStepForwardAsync_StopsAtSeekLoopStartAndEnd()
     {
         var events = new List<string>();
@@ -1098,9 +1160,58 @@ public sealed class TransportStepTests
         string newText
     )
     {
-        var selected = playback.SelectByDirection(backward: previousText, forward: newText);
+        var selected = playback.SelectByDirection(backwardStore: previousText, forward: newText);
         events.Add($"simulate {label}: {selected}");
         return selected;
+    }
+
+    private static async PlaybackTask SelectAndSeekLoopScenario(
+        Playback playback,
+        List<string> events,
+        TestPanel panel
+    )
+    {
+        var text = "Hello, world!";
+
+        text = playback.SelectByDirection(backwardStore: text, forward: "Working...");
+        await playback.Delay(TimeSpan.FromMilliseconds(300));
+        var rect = AddTestRect(playback, events, panel);
+        await playback.Checkpoint("rectangle added");
+
+        await foreach (var progress in playback.ForEachOnSeek(TimeSpan.FromMilliseconds(2700)))
+        {
+            rect.Width = 450 * (1 - progress.Progress);
+            events.Add("rect:" + progress.Progress.ToString("0.###", CultureInfo.InvariantCulture));
+        }
+
+        text = playback.SelectByDirection(backwardStore: text, forward: "End");
+        events.Add("end:" + text);
+    }
+
+    private static TestRect AddTestRect(Playback playback, List<string> events, TestPanel panel)
+    {
+        if (playback.CurrentDirection == PlaybackDirection.Forward)
+        {
+            events.Add("add");
+            var rect = new TestRect();
+            panel.Rects.Add(rect);
+            return rect;
+        }
+
+        events.Add("remove");
+        var last = panel.Rects[^1];
+        panel.Rects.RemoveAt(panel.Rects.Count - 1);
+        return last;
+    }
+
+    private sealed class TestPanel
+    {
+        public List<TestRect> Rects { get; } = [];
+    }
+
+    private sealed class TestRect
+    {
+        public double Width { get; set; }
     }
 
     private static async PlaybackTask DirectionControlledStoreScenario(

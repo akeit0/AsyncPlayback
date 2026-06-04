@@ -11,8 +11,7 @@ Playback playback = null!;
 bool heldslider = false;
 var transportGate = new SemaphoreSlim(1, 1);
 var window = new Window()
-    .Title("Hello MewUI")
-    .Resizable(520, 360)
+    .Resizable(460, 360)
     .Padding(12)
     .Content(
         new StackPanel()
@@ -75,11 +74,6 @@ async void SyncSlider(Playback playback, double value)
     await transportGate.WaitAsync();
     try
     {
-        if (playback.Time.TotalSeconds < value)
-        {
-            slider.Value = playback.Time.TotalSeconds;
-            return;
-        }
         await playback.MoveToAsync(TimeSpan.FromSeconds(value));
         timeLabel.Text = $"{playback.Time.TotalSeconds:F1}s";
     }
@@ -91,31 +85,32 @@ async void SyncSlider(Playback playback, double value)
 
 async PlaybackTask SimulateWork(Playback playback)
 {
-    label.Text = playback.SelectByDirection(backward: label.Text, forward: "Working...");
+    label.Text = playback.SelectByDirection(backwardStore: label.Text, forward: "Working...");
 
     await playback.Delay(TimeSpan.FromSeconds(0.3));
     var rect = AddRect(playback);
     await playback.Checkpoint("rectangle added");
     await foreach (var progress in playback.ForEachOnSeek(TimeSpan.FromSeconds(2.7)))
     {
-        rect.Width = 510 * (1 - progress.Progress);
+        rect.Width = 450 * (1 - progress.Progress);
     }
 
-    label.Text = playback.SelectByDirection(backward: label.Text, forward: "End");
+    label.Text = playback.SelectByDirection(backwardStore: label.Text, forward: "End");
 }
 
 Rectangle AddRect(Playback playback)
 {
     if (playback.CurrentDirection == PlaybackDirection.Forward)
     {
-        var rect = new Rectangle().Width(510).Height(100).Fill(Color.Green);
+        var rect = new Rectangle().Width(450).Height(100).Fill(Color.Green);
         sp.Add(rect);
 
         return rect;
     }
     else
     {
+        var last = sp.Children[^1];
         sp.RemoveAt(sp.Children.Count - 1);
-        return null!;
+        return (Rectangle)last;
     }
 }

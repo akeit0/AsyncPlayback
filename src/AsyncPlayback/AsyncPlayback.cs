@@ -149,7 +149,7 @@ public sealed class Playback
         return true;
     }
 
-    public T SelectByDirection<T>(T backward, T forward)
+    public T SelectByDirection<T>(T backwardStore, T forward)
         where T : notnull
     {
         EnsureStarted();
@@ -161,7 +161,7 @@ public sealed class Playback
             throw new InvalidOperationException("No stored state found for backward selection.");
         }
 
-        Store(backward);
+        Store(backwardStore);
         return forward;
     }
 
@@ -1015,8 +1015,8 @@ public sealed class Playback
 
         if (ownerRecord != null)
         {
-            ownerRecord.EntryCheckpoint ??= checkpoint;
-            BindStoreCheckpoint(runner, checkpointId, ownerRecord.EntryCheckpoint);
+            ownerRecord.EntryCheckpoint = checkpoint;
+            BindStoreCheckpoint(checkpoint);
 
             if (
                 SuppressCheckpointAutoContinuation
