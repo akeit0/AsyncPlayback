@@ -52,7 +52,6 @@ public sealed class Playback
     public TimeSpan Time { get; private set; }
 
     public PlaybackDirection CurrentDirection => currentDirection;
-    public double Speed { get; set; } = 1.0;
     public bool DebugLogging { get; set; }
     public PlaybackMode Mode { get; private set; } = PlaybackMode.Recording;
 
@@ -341,26 +340,6 @@ public sealed class Playback
             suppressLoopExitFor = null;
 
         return new(promise);
-    }
-
-    public ValueTask TickAsync(TimeSpan realDelta, CancellationToken cancellationToken = default)
-    {
-        if (realDelta < TimeSpan.Zero)
-            throw new ArgumentOutOfRangeException(
-                nameof(realDelta),
-                "Tick delta must be non-negative."
-            );
-
-        if (Speed == 0.0)
-            return ValueTask.CompletedTask;
-
-        var virtualTicks = checked((long)(realDelta.Ticks * Speed));
-        var target = TimeSpan.FromTicks(Time.Ticks + virtualTicks);
-
-        if (target < TimeSpan.Zero)
-            target = TimeSpan.Zero;
-
-        return AdvanceToAsync(target, TransportOptions.Traverse, cancellationToken);
     }
 
     public ValueTask AdvanceByAsync(
