@@ -1,0 +1,482 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AsyncPlayback Timeline Viewer</title>
+  <link rel="stylesheet" href="https://unpkg.com/vis-timeline@7.7.3/styles/vis-timeline-graph2d.min.css">
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: Segoe UI, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      color: #172026;
+      background: #f5f7f8;
+    }
+
+    body {
+      margin: 0;
+    }
+
+    [hidden] {
+      display: none !important;
+    }
+
+    .shell {
+      display: grid;
+      grid-template-rows: auto auto 1fr;
+      min-height: 100vh;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 14px 18px;
+      background: #ffffff;
+      border-bottom: 1px solid #d9e0e4;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 650;
+    }
+
+    .controls {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: #34424a;
+      font-size: 13px;
+      user-select: none;
+    }
+
+    input[type="file"] {
+      max-width: 280px;
+    }
+
+    button {
+      border: 1px solid #c7d0d5;
+      background: #ffffff;
+      border-radius: 6px;
+      padding: 7px 11px;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background: #edf2f4;
+    }
+
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(130px, 1fr));
+      gap: 1px;
+      background: #d9e0e4;
+      border-bottom: 1px solid #d9e0e4;
+    }
+
+    .metric {
+      background: #ffffff;
+      padding: 10px 14px;
+      min-width: 0;
+    }
+
+    .metric span {
+      display: block;
+      color: #66757f;
+      font-size: 12px;
+    }
+
+    .metric strong {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      margin-top: 2px;
+      font-size: 14px;
+    }
+
+    main {
+      min-height: 0;
+      padding: 14px;
+    }
+
+    #timeline {
+      height: calc(100vh - 150px);
+      min-height: 420px;
+      background: #ffffff;
+      border: 1px solid #d9e0e4;
+    }
+
+    .empty {
+      display: grid;
+      place-items: center;
+      height: calc(100vh - 150px);
+      min-height: 420px;
+      background: #ffffff;
+      border: 1px solid #d9e0e4;
+      color: #66757f;
+    }
+
+    .vis-item.call {
+      background: #d9edf8;
+      border-color: #6aa7c8;
+    }
+
+    .vis-item.effect {
+      background: #e4f3dc;
+      border-color: #80b466;
+    }
+
+    .vis-item.delay {
+      background: #fff1c7;
+      border-color: #d2a333;
+    }
+
+    .vis-item.seekloop {
+      background: #eadff6;
+      border-color: #9a74c6;
+    }
+
+    .vis-item.checkpoint {
+      background: #ffffff;
+      border-color: #5d6a72;
+      color: #5d6a72;
+      min-width: 8px;
+    }
+
+    .vis-item.sample {
+      background: #f1f4f6;
+      border-color: #8b9aa3;
+      color: #34424a;
+    }
+
+    .vis-item .vis-item-content {
+      font-size: 12px;
+      line-height: 16px;
+      max-width: 240px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .vis-labelset .vis-label {
+      color: #2c3940;
+    }
+
+    .vis-labelset .vis-label .vis-inner {
+      max-width: 360px;
+      overflow: hidden;
+    }
+
+    @media (max-width: 760px) {
+      header {
+        align-items: stretch;
+        flex-direction: column;
+      }
+
+      .summary {
+        grid-template-columns: 1fr 1fr;
+      }
+
+      #timeline,
+      .empty {
+        height: calc(100vh - 250px);
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <h1>AsyncPlayback Timeline Viewer</h1>
+      <div class="controls">
+        <input id="file" type="file" accept="application/json,.json">
+        <label class="toggle">
+          <input id="internals" type="checkbox">
+          Show internals
+        </label>
+        <button id="fit" type="button">Fit</button>
+      </div>
+    </header>
+
+    <section class="summary" aria-live="polite">
+      <div class="metric"><span>Schema</span><strong id="schema">-</strong></div>
+      <div class="metric"><span>Records</span><strong id="records">-</strong></div>
+      <div class="metric"><span>Samples</span><strong id="samples">-</strong></div>
+      <div class="metric"><span>Playback Time</span><strong id="time">-</strong></div>
+      <div class="metric"><span>Direction</span><strong id="direction">-</strong></div>
+    </section>
+
+    <main>
+      <div id="empty" class="empty">Load a timeline JSON file exported from AsyncPlayback.</div>
+      <div id="timeline" hidden></div>
+    </main>
+  </div>
+
+  <script src="https://unpkg.com/vis-timeline@7.7.3/standalone/umd/vis-timeline-graph2d.min.js"></script>
+  <script>
+    const fileInput = document.getElementById("file");
+    const internalsInput = document.getElementById("internals");
+    const fitButton = document.getElementById("fit");
+    const timelineElement = document.getElementById("timeline");
+    const emptyElement = document.getElementById("empty");
+    const baseTime = new Date(2000, 0, 1, 0, 0, 0, 0).getTime();
+    let timeline;
+    let loadedTimeline;
+
+    fileInput.addEventListener("change", async () => {
+      const file = fileInput.files && fileInput.files[0];
+      if (!file) return;
+
+      const text = await file.text();
+      loadedTimeline = JSON.parse(text);
+      render(loadedTimeline);
+    });
+
+    internalsInput.addEventListener("change", () => {
+      if (loadedTimeline) render(loadedTimeline);
+    });
+
+    fitButton.addEventListener("click", () => {
+      if (timeline) timeline.fit({ animation: true });
+    });
+
+    function render(data) {
+      updateSummary(data);
+
+      const records = filterRecords(data.records || []);
+      const visibleIds = new Set(records.map(record => record.id));
+      const layout = layoutRecords(records);
+      const samples = filterSamples(data.samples || [], visibleIds);
+      const groups = buildGroups(layout.groups, samples);
+      const items = [
+        ...records.map(record => toTimelineItem(record, layout.groupById.get(record.id))),
+        ...samples.map(toSampleItem)
+      ];
+
+      emptyElement.hidden = true;
+      timelineElement.hidden = false;
+
+      if (timeline) {
+        timeline.destroy();
+      }
+
+      timeline = new vis.Timeline(
+        timelineElement,
+        new vis.DataSet(items),
+        new vis.DataSet(groups),
+        {
+          stack: false,
+          horizontalScroll: true,
+          zoomKey: "ctrlKey",
+          orientation: "top",
+          groupOrder: "order",
+          margin: { item: 8, axis: 8 },
+          tooltip: { followMouse: true },
+          format: {
+            minorLabels: {
+              millisecond: "SSS[ms]",
+              second: "s.SSS[s]",
+              minute: "m:ss",
+              hour: "H:mm:ss"
+            },
+            majorLabels: {
+              millisecond: "HH:mm:ss",
+              second: "HH:mm:ss",
+              minute: "HH:mm",
+              hour: "HH:mm"
+            }
+          }
+        }
+      );
+
+      timeline.fit();
+    }
+
+    function updateSummary(data) {
+      document.getElementById("schema").textContent = data.schema || "-";
+      const records = filterRecords(data.records || []);
+      const total = (data.records || []).length;
+      document.getElementById("records").textContent =
+        records.length === total ? String(total) : `${records.length}/${total}`;
+      document.getElementById("samples").textContent = String((data.samples || []).length);
+      document.getElementById("time").textContent = data.playback?.time || "-";
+      document.getElementById("direction").textContent = data.playback?.direction || "-";
+    }
+
+    function filterRecords(records) {
+      if (internalsInput.checked) return records;
+      return records.filter(record => record.visibility !== "Infrastructure");
+    }
+
+    function filterSamples(samples, visibleIds) {
+      return samples.map(sample => ({
+        ...sample,
+        activeRecordIds: (sample.activeRecordIds || []).filter(id => visibleIds.has(id))
+      }));
+    }
+
+    function layoutRecords(records) {
+      const spanLaneEnds = [];
+      const pointLaneEnds = [];
+      const groupById = new Map();
+      const maxEnd = records.reduce((max, record) => Math.max(max, record.endSeconds || 0), 0);
+      const pointPadding = Math.max(0.001, maxEnd * 0.015);
+
+      for (const record of records.filter(record => (record.durationTicks || 0) > 0)) {
+        const minLane = Math.max(0, record.depth || 0);
+        let lane = minLane;
+
+        while ((spanLaneEnds[lane] ?? Number.NEGATIVE_INFINITY) > record.startSeconds) {
+          lane++;
+        }
+
+        groupById.set(record.id, levelGroupId(lane));
+        spanLaneEnds[lane] = Math.max(spanLaneEnds[lane] ?? 0, record.endSeconds);
+      }
+
+      for (const record of records.filter(record => (record.durationTicks || 0) === 0)) {
+        let markerLane = 0;
+
+        while ((pointLaneEnds[markerLane] ?? Number.NEGATIVE_INFINITY) >= record.startSeconds) {
+          markerLane++;
+        }
+
+        groupById.set(record.id, checkpointGroupId(markerLane));
+        pointLaneEnds[markerLane] = record.startSeconds + pointPadding;
+      }
+
+      const groups = [
+        ...spanLaneEnds.map((_, index) => ({
+          id: levelGroupId(index),
+          content: `Level ${index}`,
+          order: index
+        })),
+        ...pointLaneEnds.map((_, index) => ({
+          id: checkpointGroupId(index),
+          content: index === 0 ? "Checkpoints" : `Checkpoints ${index + 1}`,
+          order: spanLaneEnds.length + index
+        }))
+      ];
+
+      return { groups, groupById };
+    }
+
+    function buildGroups(groups, samples) {
+      if (samples.length > 0) {
+        groups.push({ id: "Samples", content: "Samples", order: groups.length });
+      }
+
+      return groups;
+    }
+
+    function toTimelineItem(record, group) {
+      const start = toDate(record.startSeconds);
+      const hasDuration = record.durationTicks > 0;
+      const content = record.kind === "Checkpoint"
+        ? pointContent(record)
+        : `${kindSymbol(record.kind)} ${escapeHtml(displayLabel(record))}`;
+
+      return {
+        id: record.id,
+        group: group ?? levelGroupId(0),
+        content,
+        start,
+        end: hasDuration ? toDate(record.endSeconds) : undefined,
+        type: hasDuration ? "range" : "point",
+        className: String(record.kind || "").toLowerCase(),
+        title: tooltip(record)
+      };
+    }
+
+    function levelGroupId(index) {
+      return `level-${index}`;
+    }
+
+    function checkpointGroupId(index) {
+      return `checkpoint-${index}`;
+    }
+
+    function pointContent(record) {
+      return record.label;
+    }
+
+    function displayLabel(record) {
+      if (record.kind === "Call" && record.label.startsWith("call "))
+        return record.label.slice("call ".length);
+
+      return record.label;
+    }
+
+    function shortKind(kind) {
+      switch (kind) {
+        case "Checkpoint": return "CP";
+        case "SeekLoop": return "LOOP";
+        default: return kind || "";
+      }
+    }
+
+    function kindSymbol(kind) {
+      switch (kind) {
+        case "Checkpoint": return "CP";
+        case "Call": return "CALL";
+        case "Effect": return "FX";
+        case "Delay": return "WAIT";
+        case "SeekLoop": return "LOOP";
+        default: return escapeHtml(kind || "");
+      }
+    }
+
+    function toSampleItem(sample, index) {
+      const active = sample.activeRecordIds || [];
+      return {
+        id: `sample-${index}`,
+        group: "Samples",
+        content: String(active.length),
+        start: toDate(sample.timeSeconds),
+        type: "point",
+        className: "sample",
+        title: [
+          `sample: ${sample.time}`,
+          `active: ${active.length === 0 ? "-" : active.map(id => `#${id}`).join(", ")}`
+        ].map(escapeHtml).join("<br>")
+      };
+    }
+
+    function tooltip(record) {
+      const parent = record.parentId == null ? "-" : `#${record.parentId}`;
+      const delta = record.deltaTime || "-";
+      return [
+        `#${record.id} ${record.kind}`,
+        displayLabel(record),
+        `start: ${record.start}`,
+        `end: ${record.end}`,
+        `duration: ${record.duration}`,
+        `parent: ${parent}`,
+        `delta: ${delta}`
+      ].map(escapeHtml).join("<br>");
+    }
+
+    function toDate(seconds) {
+      return new Date(baseTime + Math.round((seconds || 0) * 1000));
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+  </script>
+</body>
+</html>

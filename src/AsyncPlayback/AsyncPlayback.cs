@@ -793,7 +793,7 @@ public sealed class Playback
         string debugLabel
     )
     {
-        var label = $"call {debugLabel}";
+        var label = debugLabel;
 
         if (Mode == PlaybackMode.Playback)
         {

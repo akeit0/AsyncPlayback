@@ -47,6 +47,9 @@ static async PlaybackTask Scenario(Playback playback)
 For the runtime model, timeline records, transport behavior, and TimeProvider
 integration, see [doc/how-it-works.md](doc/how-it-works.md).
 
+For timeline JSON export and the browser visualizer, see
+[doc/timeline-visualizer.md](doc/timeline-visualizer.md).
+
 `TryStepForwardAsync()` and `TryStepBackAsync()` move to the next recorded await point.
 Use logical granularity when you want user-facing steps and want to skip helper method
 entry/call plumbing:

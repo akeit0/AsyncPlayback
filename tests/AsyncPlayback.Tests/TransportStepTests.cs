@@ -240,6 +240,101 @@ public sealed class TransportStepTests
     }
 
     [Test]
+    public async Task Records_MarkEntryAndImplicitCheckpointsAsInfrastructure()
+    {
+        var events = new List<string>();
+        var playback = Playback.Start(r => TypedHelperScenario(r, events));
+
+        await playback.RunToEndAsync();
+
+        await Assert
+            .That(
+                playback
+                    .Records.Where(static record =>
+                        record.DebugLabel.StartsWith("entry ", StringComparison.Ordinal)
+                        || record.DebugLabel.StartsWith("after ", StringComparison.Ordinal)
+                    )
+                    .All(static record =>
+                        record.Visibility == TimelineRecordVisibility.Infrastructure
+                    )
+            )
+            .IsTrue();
+        await Assert
+            .That(playback.Records.Single(static record => record.DebugLabel == "outer").Visibility)
+            .IsEqualTo(TimelineRecordVisibility.Workflow);
+    }
+
+    [Test]
+    public async Task ExportTimeline_IncludesRecordSpansAndPeriodicSamples()
+    {
+        var timeProvider = new FakeTimeProvider();
+        var events = new List<string>();
+        var playback = Playback.Start(
+            r => TimedEffectScenario(r, events, timeProvider),
+            timeProvider
+        );
+
+        await playback.RunToEndAsync();
+
+        var export = playback.ExportTimeline(
+            new TimelineExportOptions { SampleInterval = TimeSpan.FromMilliseconds(100) }
+        );
+        var effect = export.Records.Single(static record => record.Label == "timed effect");
+
+        await Assert.That(export.Schema).IsEqualTo("async-playback.timeline.v1");
+        await Assert.That(effect.DurationSeconds).IsEqualTo(0.3);
+        await Assert.That(effect.Visibility).IsEqualTo("Workflow");
+        await Assert
+            .That(export.Samples.Any(sample => sample.ActiveRecordIds.Contains(effect.Id)))
+            .IsTrue();
+        await Assert.That(playback.ExportTimelineJson()).Contains("\"visibility\"");
+        await Assert.That(playback.ExportTimelineJson()).Contains("\"schema\"");
+    }
+
+    [Test]
+    public async Task Records_UseReadablePlaybackTaskMethodNames()
+    {
+        var events = new List<string>();
+        var playback = Playback.Start(r => TypedHelperScenario(r, events));
+
+        await playback.RunToEndAsync();
+
+        await Assert
+            .That(playback.Records.Select(static record => record.DebugLabel))
+            .Contains("entry TypedHelperScenario");
+        await Assert
+            .That(playback.Records.Select(static record => record.DebugLabel))
+            .Contains("TypedHelper");
+        await Assert
+            .That(playback.Records.Any(static record => record.DebugLabel.Contains('<')))
+            .IsFalse();
+    }
+
+    [Test]
+    public async Task Records_AfterAwaitRemainInCallerScope()
+    {
+        var timeProvider = new FakeTimeProvider();
+        var events = new List<string>();
+        var playback = Playback.Start(
+            r => EffectThenChildCallScenario(r, events, timeProvider),
+            timeProvider
+        );
+
+        await playback.RunToEndAsync();
+
+        var effect = playback.Records.Single(static record => record.DebugLabel == "outer effect");
+        var childCall = playback.Records.Single(static record =>
+            record.DebugLabel == "NestedDelay"
+        );
+        var delay = playback.Records.Single(static record => record.DebugLabel == "nested delay");
+
+        await Assert.That(childCall.ParentId).IsNotEqualTo(effect.Id);
+        await Assert.That(childCall.Depth).IsEqualTo(0);
+        await Assert.That(delay.ParentId).IsEqualTo(childCall.Id);
+        await Assert.That(delay.Depth).IsEqualTo(1);
+    }
+
+    [Test]
     public async Task MoveByAsync_BackwardAcrossCallStart_DoesNotEnterChildTwice()
     {
         var events = new List<string>();
@@ -799,6 +894,30 @@ public sealed class TransportStepTests
         await playback.Checkpoint("after timed effect");
     }
 
+    private static async PlaybackTask EffectThenChildCallScenario(
+        Playback playback,
+        List<string> events,
+        FakeTimeProvider timeProvider
+    )
+    {
+        await playback.Effect(
+            () =>
+            {
+                events.Add("effect");
+                timeProvider.Advance(TimeSpan.FromMilliseconds(100));
+                return ValueTask.CompletedTask;
+            },
+            "outer effect"
+        );
+
+        await NestedDelay(playback);
+    }
+
+    private static async PlaybackTask NestedDelay(Playback playback)
+    {
+        await playback.Delay(TimeSpan.FromMilliseconds(100), "nested delay");
+    }
+
     private static async PlaybackTask ForwardOnlyEffectScenario(
         Playback playback,
         List<string> events
@@ -944,5 +1063,4 @@ public sealed class TransportStepTests
                 .Where(static label => !label.StartsWith("entry ", StringComparison.Ordinal))
         );
     }
-
 }

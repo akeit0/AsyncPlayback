@@ -7,6 +7,16 @@ foreach (var r in playback.Records)
 {
     Console.WriteLine(r);
 }
+
+var timelinePath = Path.GetFullPath(Path.Combine("sandbox", "ConsoleApp3", "obj", "timeline.json"));
+await File.WriteAllTextAsync(
+    timelinePath,
+    playback.ExportTimelineJson(
+        new TimelineExportOptions { SampleInterval = TimeSpan.FromMilliseconds(50) }
+    )
+);
+Console.WriteLine($"timeline json: {timelinePath}");
+
 await MoveBackwardAsync(playback, "undo");
 
 static async Task MoveForwardAsync(Playback playback, string label)

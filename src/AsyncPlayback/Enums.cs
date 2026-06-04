@@ -9,6 +9,12 @@ public enum TimelineRecordKind
     Call,
 }
 
+public enum TimelineRecordVisibility
+{
+    Workflow,
+    Infrastructure,
+}
+
 internal enum CheckpointRecordKind
 {
     Entry,

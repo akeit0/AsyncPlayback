@@ -9,6 +9,8 @@ public readonly struct TimelineRecordInfo
         TimeSpan duration,
         string debugLabel,
         int? parentId,
+        int depth,
+        TimelineRecordVisibility visibility,
         long? timestamp,
         TimeSpan? deltaTime
     )
@@ -19,6 +21,8 @@ public readonly struct TimelineRecordInfo
         Duration = duration;
         DebugLabel = debugLabel;
         ParentId = parentId;
+        Depth = depth;
+        Visibility = visibility;
         Timestamp = timestamp;
         DeltaTime = deltaTime;
     }
@@ -30,13 +34,16 @@ public readonly struct TimelineRecordInfo
     public TimeSpan EndTime => StartTime + Duration;
     public string DebugLabel { get; }
     public int? ParentId { get; }
+    public int Depth { get; }
+    public TimelineRecordVisibility Visibility { get; }
     public long? Timestamp { get; }
     public TimeSpan? DeltaTime { get; }
 
     public override string ToString()
     {
+        var indent = new string(' ', Depth * 2);
         var parent = ParentId is { } id ? $" parent=#{id}" : "";
-        return $"#{Id} {Kind} {StartTime} - {EndTime}{parent}: {DebugLabel}";
+        return $"{indent}#{Id} {Kind} {StartTime} - {EndTime}{parent}: {DebugLabel}";
     }
 }
 
@@ -92,9 +99,31 @@ internal abstract class TimelineRecord
             Duration,
             DebugLabel,
             Parent?.Id,
+            GetDepth(),
+            GetVisibility(),
             EntryCheckpoint?.Timestamp,
             EntryCheckpoint?.DeltaTime
         );
+    }
+
+    private TimelineRecordVisibility GetVisibility()
+    {
+        return this switch
+        {
+            CheckpointTimelineRecord checkpoint
+                when checkpoint.CheckpointKind != CheckpointRecordKind.User =>
+                TimelineRecordVisibility.Infrastructure,
+            _ => TimelineRecordVisibility.Workflow,
+        };
+    }
+
+    private int GetDepth()
+    {
+        var depth = 0;
+        for (var parent = Parent; parent != null; parent = parent.Parent)
+            depth++;
+
+        return depth;
     }
 
     public virtual void ResetPlaybackState() { }

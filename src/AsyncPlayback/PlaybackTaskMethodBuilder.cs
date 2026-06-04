@@ -118,6 +118,39 @@ public sealed class PlaybackTaskMethodBuilder<T>
     }
 }
 
+internal static class FormatStateMachineNameCache<T>
+{
+    public static readonly string Name = FormatGeneratedStateMachineName(typeof(T).Name);
+
+    private static string FormatGeneratedStateMachineName(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            return name;
+
+        var localFunctionMarker = "g__";
+        var localFunctionStart = name.IndexOf(localFunctionMarker, StringComparison.Ordinal);
+        if (localFunctionStart >= 0)
+        {
+            var start = localFunctionStart + localFunctionMarker.Length;
+            var end = name.IndexOf('|', start);
+            if (end < 0)
+                end = name.IndexOf('>', start);
+
+            if (end > start)
+                return name[start..end];
+        }
+
+        if (name[0] == '<')
+        {
+            var end = name.IndexOf('>');
+            if (end > 1 && name.IndexOf("d__", end, StringComparison.Ordinal) >= 0)
+                return name[1..end];
+        }
+
+        return name;
+    }
+}
+
 internal sealed class PlaybackTaskMethodBuilderCore
 {
     private readonly IPlaybackRunner? parentRunner;
@@ -152,23 +185,20 @@ internal sealed class PlaybackTaskMethodBuilderCore
 
         this.runner = runner;
         promise.AttachRunner(runner);
+        var stateMachineName = FormatStateMachineNameCache<TStateMachine>.Name;
 
         if (parentRunner == null)
         {
             playback.AttachRootRunner(runner);
-            playback.RegisterRunnerEntry(runner, null, $"entry {typeof(TStateMachine).Name}");
+            playback.RegisterRunnerEntry(runner, null, $"entry {stateMachineName}");
         }
         else
         {
-            var call = playback.GetOrCreateCallRecord(
-                parentRunner,
-                runner,
-                typeof(TStateMachine).Name
-            );
+            var call = playback.GetOrCreateCallRecord(parentRunner, runner, stateMachineName);
 
             runner.BindCurrentCallRecord(call);
 
-            playback.RegisterRunnerEntry(runner, call, $"entry {typeof(TStateMachine).Name}");
+            playback.RegisterRunnerEntry(runner, call, $"entry {stateMachineName}");
         }
 
         playback.Post(runner.MoveNext);
@@ -218,7 +248,7 @@ internal sealed class PlaybackTaskMethodBuilderCore
 
         var ownerRecord = awaitedPromise.OwnerRecord;
 
-        var resumeScope = ownerRecord ?? PlaybackRuntime.CurrentRecordScope;
+        var resumeScope = PlaybackRuntime.CurrentRecordScope ?? typedRunner.CurrentCallRecord;
 
         var checkpointId = typedRunner.CaptureCheckpoint(
             ref stateMachine,
