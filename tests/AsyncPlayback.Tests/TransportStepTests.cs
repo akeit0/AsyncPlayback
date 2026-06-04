@@ -9,7 +9,7 @@ public sealed class TransportStepTests
     public async Task RunToEndAsync_ReplaysCheckpointSegmentsOnce()
     {
         var events = new List<string>();
-        var playback = Playback.Create(r => CheckpointScenario(r, events));
+        var playback = Playback.Start(r => CheckpointScenario(r, events));
 
         await playback.RunToEndAsync();
 
@@ -17,48 +17,48 @@ public sealed class TransportStepTests
     }
 
     [Test]
-    public async Task TryMoveNextAsync_StopsAtExplicitCheckpoints()
+    public async Task TryStepForwardAsync_StopsAtExplicitCheckpoints()
     {
         var events = new List<string>();
-        var playback = Playback.Create(r => CheckpointScenario(r, events));
+        var playback = Playback.Start(r => CheckpointScenario(r, events));
 
-        var first = await MoveNextAsync(playback);
+        var first = await StepForwardAsync(playback);
         await Assert.That(first.Time).IsEqualTo(TimeSpan.Zero);
         await Assert.That(Joined(events)).IsEqualTo("0");
 
-        var second = await MoveNextAsync(playback);
+        var second = await StepForwardAsync(playback);
         await Assert.That(second.Time).IsEqualTo(TimeSpan.Zero);
         await Assert.That(Joined(events)).IsEqualTo("0,1");
 
-        var third = await MoveNextAsync(playback);
+        var third = await StepForwardAsync(playback);
         await Assert.That(third.Time).IsEqualTo(TimeSpan.Zero);
         await Assert.That(Joined(events)).IsEqualTo("0,1,2");
 
-        await AssertMoveNextFalseAsync(playback);
+        await AssertStepForwardFalseAsync(playback);
         await Assert.That(Joined(events)).IsEqualTo("0,1,2");
     }
 
     [Test]
-    public async Task TryMoveBackAsync_ReplaysCheckpointSegmentsWithoutTerminalNoOp()
+    public async Task TryStepBackAsync_ReplaysCheckpointSegmentsWithoutTerminalNoOp()
     {
         var events = new List<string>();
-        var playback = Playback.Create(r => CheckpointScenario(r, events));
+        var playback = Playback.Start(r => CheckpointScenario(r, events));
         await playback.RunToEndAsync();
         events.Clear();
 
-        var first = await MoveBackAsync(playback);
+        var first = await StepBackAsync(playback);
         await Assert.That(first.Time).IsEqualTo(TimeSpan.Zero);
         await Assert.That(Joined(events)).IsEqualTo("2");
 
-        var second = await MoveBackAsync(playback);
+        var second = await StepBackAsync(playback);
         await Assert.That(second.Time).IsEqualTo(TimeSpan.Zero);
         await Assert.That(Joined(events)).IsEqualTo("2,1");
 
-        var third = await MoveBackAsync(playback);
+        var third = await StepBackAsync(playback);
         await Assert.That(third.Time).IsEqualTo(TimeSpan.Zero);
         await Assert.That(Joined(events)).IsEqualTo("2,1,0");
 
-        await AssertMoveBackFalseAsync(playback);
+        await AssertStepBackFalseAsync(playback);
         await Assert.That(Joined(events)).IsEqualTo("2,1,0");
     }
 
@@ -66,94 +66,169 @@ public sealed class TransportStepTests
     public async Task CurrentDirection_IsBackwardWhileReplayingCheckpointBack()
     {
         var directions = new List<PlaybackDirection>();
-        var playback = Playback.Create(r => DirectionScenario(r, directions));
+        var playback = Playback.Start(r => DirectionScenario(r, directions));
         await playback.RunToEndAsync();
         directions.Clear();
 
-        await MoveBackAsync(playback);
+        await StepBackAsync(playback);
         await Assert.That(directions).IsEquivalentTo([PlaybackDirection.Backward]);
     }
 
     [Test]
-    public async Task TryMoveNextAsync_StopsAtSeekLoopStartAndEnd()
+    public async Task TryStepForwardAsync_StopsAtSeekLoopStartAndEnd()
     {
         var events = new List<string>();
-        var playback = Playback.Create(r => SeekLoopScenario(r, events));
+        var playback = Playback.Start(r => SeekLoopScenario(r, events));
 
-        var start = await MoveNextAsync(playback);
+        var start = await StepForwardAsync(playback);
         await Assert.That(start.Time).IsEqualTo(TimeSpan.Zero);
         await Assert.That(Joined(events)).IsEqualTo("seek:0");
 
-        var end = await MoveNextAsync(playback);
+        var end = await StepForwardAsync(playback);
         await Assert.That(end.Time).IsEqualTo(TimeSpan.FromSeconds(1));
         await Assert.That(Joined(events)).IsEqualTo("seek:0,seek:1");
 
-        await AssertMoveNextFalseAsync(playback);
+        await AssertStepForwardFalseAsync(playback);
     }
 
     [Test]
-    public async Task TryMoveBackAsync_StopsAtSeekLoopEndAndStart()
+    public async Task TryStepBackAsync_StopsAtSeekLoopEndAndStart()
     {
         var events = new List<string>();
-        var playback = Playback.Create(r => SeekLoopScenario(r, events));
+        var playback = Playback.Start(r => SeekLoopScenario(r, events));
         await playback.RunToEndAsync();
         events.Clear();
 
-        var end = await MoveBackAsync(playback);
+        var end = await StepBackAsync(playback);
         await Assert.That(end.Time).IsEqualTo(TimeSpan.FromSeconds(1));
         await Assert.That(Joined(events)).IsEqualTo("seek:1");
 
-        var start = await MoveBackAsync(playback);
+        var start = await StepBackAsync(playback);
         await Assert.That(start.Time).IsEqualTo(TimeSpan.Zero);
         await Assert.That(Joined(events)).IsEqualTo("seek:1,seek:0");
 
-        await AssertMoveBackFalseAsync(playback);
+        await AssertStepBackFalseAsync(playback);
     }
 
     [Test]
-    public async Task TryMoveNextAsync_StopsAtDelayStartAndEnd()
+    public async Task TryStepForwardAsync_StopsAtDelayStartAndEnd()
     {
         var events = new List<string>();
-        var playback = Playback.Create(r => DelayScenario(r, events));
+        var playback = Playback.Start(r => DelayScenario(r, events));
 
-        var start = await MoveNextAsync(playback);
+        var start = await StepForwardAsync(playback);
         await Assert.That(start.Time).IsEqualTo(TimeSpan.Zero);
         await Assert.That(Joined(events)).IsEqualTo("delay:start");
 
-        var end = await MoveNextAsync(playback);
+        var end = await StepForwardAsync(playback);
         await Assert.That(end.Time).IsEqualTo(TimeSpan.FromSeconds(1));
         await Assert.That(Joined(events)).IsEqualTo("delay:start,delay:end");
 
-        await AssertMoveNextFalseAsync(playback);
+        await AssertStepForwardFalseAsync(playback);
     }
 
     [Test]
-    public async Task AdvanceByAsync_Traverse_EvaluatesSeekLoopIntermediateTargets()
+    public async Task MoveByAsync_Traverse_EvaluatesSeekLoopIntermediateTargets()
     {
         var events = new List<string>();
-        var playback = Playback.Create(r => SeekLoopScenario(r, events));
+        var playback = Playback.Start(r => SeekLoopScenario(r, events));
 
-        await playback.AdvanceByAsync(TimeSpan.FromSeconds(0.25));
-        await playback.AdvanceByAsync(TimeSpan.FromSeconds(0.25));
-        await playback.AdvanceByAsync(TimeSpan.FromSeconds(0.5));
+        await playback.MoveByAsync(TimeSpan.FromSeconds(0.25));
+        await playback.MoveByAsync(TimeSpan.FromSeconds(0.25));
+        await playback.MoveByAsync(TimeSpan.FromSeconds(0.5));
 
         await Assert.That(Joined(events)).IsEqualTo("seek:0.25,seek:0.5,seek:1");
     }
 
     [Test]
+    public async Task TryStepForwardAsync_ReportsDeltaTimeFromTimeProvider()
+    {
+        var timeProvider = new ManualTimeProvider();
+        var events = new List<string>();
+        var playback = Playback.Start(r => CheckpointScenario(r, events), timeProvider);
+
+        timeProvider.Advance(TimeSpan.FromMilliseconds(250));
+
+        var result = await StepForwardAsync(playback);
+
+        await Assert.That(result.DeltaTime).IsEqualTo(TimeSpan.FromMilliseconds(250));
+        await Assert.That(playback.DeltaTime).IsEqualTo(TimeSpan.FromMilliseconds(250));
+        await Assert.That(result.Record?.DeltaTime).IsEqualTo(TimeSpan.FromMilliseconds(250));
+    }
+
+    [Test]
+    public async Task TryStepForwardAsync_UpdatesTimestampAtReachedAwaitPoint()
+    {
+        var timeProvider = new ManualTimeProvider();
+        var playback = Playback.Start(r => CheckpointScenario(r, []), timeProvider);
+
+        timeProvider.Advance(TimeSpan.FromMilliseconds(100));
+        var firstTimestamp = timeProvider.GetTimestamp();
+
+        await StepForwardAsync(playback);
+
+        await Assert.That(playback.Timestamp).IsEqualTo(firstTimestamp);
+
+        timeProvider.Advance(TimeSpan.FromMilliseconds(75));
+        var secondTimestamp = timeProvider.GetTimestamp();
+
+        var result = await StepForwardAsync(playback);
+
+        await Assert.That(playback.Timestamp).IsEqualTo(secondTimestamp);
+        await Assert.That(result.Timestamp).IsEqualTo(secondTimestamp);
+        await Assert.That(result.Record?.Timestamp).IsEqualTo(secondTimestamp);
+        await Assert.That(playback.DeltaTime).IsEqualTo(TimeSpan.FromMilliseconds(75));
+    }
+
+    [Test]
+    public async Task AdvanceByElapsedTimeAsync_MovesByTimeProviderDelta()
+    {
+        var timeProvider = new ManualTimeProvider();
+        var events = new List<string>();
+        var playback = Playback.Start(r => SeekLoopScenario(r, events), timeProvider);
+
+        timeProvider.Advance(TimeSpan.FromMilliseconds(250));
+
+        await playback.AdvanceByElapsedTimeAsync();
+
+        await Assert.That(playback.Time).IsEqualTo(TimeSpan.FromMilliseconds(250));
+        await Assert.That(playback.DeltaTime).IsEqualTo(TimeSpan.FromMilliseconds(250));
+        await Assert.That(Joined(events)).IsEqualTo("seek:0.25");
+    }
+
+    [Test]
+    public async Task RewindByElapsedTimeAsync_MovesBackByTimeProviderDelta()
+    {
+        var timeProvider = new ManualTimeProvider();
+        var events = new List<string>();
+        var playback = Playback.Start(r => SeekLoopScenario(r, events), timeProvider);
+
+        await playback.MoveToAsync(TimeSpan.FromSeconds(1));
+        events.Clear();
+
+        timeProvider.Advance(TimeSpan.FromMilliseconds(400));
+
+        await playback.RewindByElapsedTimeAsync();
+
+        await Assert.That(playback.Time).IsEqualTo(TimeSpan.FromMilliseconds(600));
+        await Assert.That(playback.DeltaTime).IsEqualTo(TimeSpan.FromMilliseconds(400));
+        await Assert.That(Joined(events)).IsEqualTo("seek:0.6");
+    }
+
+    [Test]
     public async Task Store_RestoresObjectByTimelinePosition()
     {
-        var playback = Playback.Create(StoreScenario);
+        var playback = Playback.Start(StoreScenario);
 
-        await playback.AdvanceToAsync(TimeSpan.FromSeconds(0.5));
+        await playback.MoveToAsync(TimeSpan.FromSeconds(0.5));
         await Assert.That(playback.TryGet<string>(out var middleState)).IsTrue();
         await Assert.That(middleState).IsEqualTo("start");
 
-        await playback.AdvanceToAsync(TimeSpan.FromSeconds(1));
+        await playback.MoveToAsync(TimeSpan.FromSeconds(1));
         await Assert.That(playback.TryGet<string>(out var endState)).IsTrue();
         await Assert.That(endState).IsEqualTo("end");
 
-        await playback.AdvanceToAsync(TimeSpan.FromSeconds(0.5));
+        await playback.MoveToAsync(TimeSpan.FromSeconds(0.5));
         await Assert.That(playback.TryGet<string>(out var restoredState)).IsTrue();
         await Assert.That(restoredState).IsEqualTo("start");
     }
@@ -161,7 +236,7 @@ public sealed class TransportStepTests
     [Test]
     public async Task Store_IsSingleCurrentObject_NotTypeKeyed()
     {
-        var playback = Playback.Create(StoreScenario);
+        var playback = Playback.Start(StoreScenario);
 
         await playback.RunToEndAsync();
 
@@ -173,74 +248,74 @@ public sealed class TransportStepTests
     [Test]
     public async Task ClearStore_RemovesCurrentObjectAndRestoresByCheckpointPosition()
     {
-        var playback = Playback.Create(ClearStoreScenario);
+        var playback = Playback.Start(ClearStoreScenario);
 
         await playback.RunToEndAsync();
         await Assert.That(playback.TryGet<string>(out _)).IsFalse();
 
-        await MoveBackAsync(playback);
+        await StepBackAsync(playback);
         await Assert.That(playback.TryGet<string>(out _)).IsFalse();
 
-        await MoveBackAsync(playback);
+        await StepBackAsync(playback);
         await Assert.That(playback.TryGet<string>(out var restored)).IsTrue();
         await Assert.That(restored).IsEqualTo("start");
     }
 
     [Test]
-    public async Task TryMoveBackAsync_RestoresStoredObjectAtCheckpointPosition()
+    public async Task TryStepBackAsync_RestoresStoredObjectAtCheckpointPosition()
     {
-        var playback = Playback.Create(CheckpointStoreScenario);
+        var playback = Playback.Start(CheckpointStoreScenario);
 
         await playback.RunToEndAsync();
 
         await Assert.That(playback.TryGet<int>(out var endState)).IsTrue();
         await Assert.That(endState).IsEqualTo(2);
 
-        await MoveBackAsync(playback);
+        await StepBackAsync(playback);
         await Assert.That(playback.TryGet<int>(out var secondState)).IsTrue();
         await Assert.That(secondState).IsEqualTo(2);
 
-        await MoveBackAsync(playback);
+        await StepBackAsync(playback);
         await Assert.That(playback.TryGet<int>(out var firstState)).IsTrue();
         await Assert.That(firstState).IsEqualTo(1);
 
-        await MoveBackAsync(playback);
+        await StepBackAsync(playback);
         await Assert.That(playback.TryGet<int>(out var initialState)).IsTrue();
         await Assert.That(initialState).IsEqualTo(0);
 
-        await AssertMoveBackFalseAsync(playback);
+        await AssertStepBackFalseAsync(playback);
     }
 
     [Test]
-    public async Task TryMoveBackAsync_RestoresStoredObjectAtDelayBoundaries()
+    public async Task TryStepBackAsync_RestoresStoredObjectAtDelayBoundaries()
     {
-        var playback = Playback.Create(StoreScenario);
+        var playback = Playback.Start(StoreScenario);
 
         await playback.RunToEndAsync();
 
         await Assert.That(playback.TryGet<string>(out var endState)).IsTrue();
         await Assert.That(endState).IsEqualTo("end");
 
-        var delayEnd = await MoveBackAsync(playback);
+        var delayEnd = await StepBackAsync(playback);
         await Assert.That(delayEnd.Time).IsEqualTo(TimeSpan.FromSeconds(1));
         await Assert.That(playback.TryGet<string>(out var delayEndState)).IsTrue();
         await Assert.That(delayEndState).IsEqualTo("end");
 
-        var delayStart = await MoveBackAsync(playback);
+        var delayStart = await StepBackAsync(playback);
         await Assert.That(delayStart.Time).IsEqualTo(TimeSpan.Zero);
         await Assert.That(playback.TryGet<string>(out var delayStartState)).IsTrue();
         await Assert.That(delayStartState).IsEqualTo("start");
 
-        await AssertMoveBackFalseAsync(playback);
+        await AssertStepBackFalseAsync(playback);
     }
 
     [Test]
     public async Task CurrentDirection_IsForwardWhileMovingNext()
     {
         var directions = new List<PlaybackDirection>();
-        var playback = Playback.Create(r => DirectionScenario(r, directions));
+        var playback = Playback.Start(r => DirectionScenario(r, directions));
 
-        await MoveNextAsync(playback);
+        await StepForwardAsync(playback);
         await Assert.That(directions).IsEquivalentTo([PlaybackDirection.Forward]);
     }
 
@@ -248,16 +323,16 @@ public sealed class TransportStepTests
     public async Task Scenario_CanStoreOnForwardAndReadOnBackward()
     {
         var restoredStates = new List<int>();
-        var playback = Playback.Create(r => DirectionControlledStoreScenario(r, restoredStates));
+        var playback = Playback.Start(r => DirectionControlledStoreScenario(r, restoredStates));
 
         await playback.RunToEndAsync();
 
         await Assert.That(restoredStates.Count).IsEqualTo(0);
 
-        await MoveBackAsync(playback);
+        await StepBackAsync(playback);
         await Assert.That(restoredStates).IsEquivalentTo([1]);
 
-        await MoveBackAsync(playback);
+        await StepBackAsync(playback);
         await Assert.That(restoredStates).IsEquivalentTo([1, 0]);
     }
 
@@ -265,70 +340,70 @@ public sealed class TransportStepTests
     public async Task Scenario_CanSelectDifferentCheckpointsFromRestoredStateAcrossDirections()
     {
         var events = new List<string>();
-        var playback = Playback.Create(r => DirectionBranchScenario(r, events));
+        var playback = Playback.Start(r => DirectionBranchScenario(r, events));
 
-        await MoveNextAsync(playback);
+        await StepForwardAsync(playback);
         await Assert.That(JoinedUserRecordLabels(playback)).IsEqualTo("decision");
 
-        await MoveNextAsync(playback);
+        await StepForwardAsync(playback);
         await Assert.That(JoinedUserRecordLabels(playback)).IsEqualTo("decision,a");
         await Assert.That(Joined(events)).IsEqualTo("");
 
-        await MoveNextAsync(playback);
+        await StepForwardAsync(playback);
         await Assert.That(JoinedUserRecordLabels(playback)).IsEqualTo("decision,a,after");
         await Assert.That(Joined(events)).IsEqualTo("a");
 
         events.Clear();
 
-        await MoveBackAsync(playback);
+        await StepBackAsync(playback);
         await Assert.That(JoinedUserRecordLabels(playback)).IsEqualTo("decision,a,after");
         await Assert.That(Joined(events)).IsEqualTo("a");
 
         events.Clear();
 
-        await MoveBackAsync(playback);
+        await StepBackAsync(playback);
         await Assert.That(JoinedUserRecordLabels(playback)).IsEqualTo("decision,b");
         await Assert.That(Joined(events)).IsEqualTo("");
 
-        await MoveNextAsync(playback);
+        await StepForwardAsync(playback);
         await Assert.That(JoinedUserRecordLabels(playback)).IsEqualTo("decision,b,after");
         await Assert.That(Joined(events)).IsEqualTo("b");
 
         events.Clear();
 
-        await MoveBackAsync(playback);
+        await StepBackAsync(playback);
         await Assert.That(JoinedUserRecordLabels(playback)).IsEqualTo("decision,b,after");
         await Assert.That(Joined(events)).IsEqualTo("b");
 
         events.Clear();
 
-        await MoveBackAsync(playback);
+        await StepBackAsync(playback);
         await Assert.That(JoinedUserRecordLabels(playback)).IsEqualTo("decision,c");
         await Assert.That(Joined(events)).IsEqualTo("");
 
-        await MoveNextAsync(playback);
+        await StepForwardAsync(playback);
         await Assert.That(JoinedUserRecordLabels(playback)).IsEqualTo("decision,c,after");
         await Assert.That(Joined(events)).IsEqualTo("c");
     }
 
     [Test]
-    public async Task TryMoveNextAsync_LogicalGranularityReportsUserDebugLabelsOnly()
+    public async Task TryStepForwardAsync_LogicalGranularityReportsUserDebugLabelsOnly()
     {
-        var playback = Playback.Create(LogicalStepScenario);
+        var playback = Playback.Start(LogicalStepScenario);
         var labels = new List<string>();
 
-        while ((await playback.TryMoveNextAsync(PlaybackStepGranularity.Logical)).Moved)
+        while ((await playback.TryStepForwardAsync(PlaybackStepGranularity.Logical)).Moved)
             labels.Add(playback.CurrentRecord?.DebugLabel ?? "<none>");
 
         await Assert.That(Joined(labels)).IsEqualTo("inner,outer");
     }
 
     [Test]
-    public async Task MoveResult_ExposesBoundaryDebugInfo()
+    public async Task StepResult_ExposesBoundaryDebugInfo()
     {
-        var playback = Playback.Create(LogicalStepScenario);
+        var playback = Playback.Start(LogicalStepScenario);
 
-        var result = await playback.TryMoveNextAsync(PlaybackStepGranularity.Logical);
+        var result = await playback.TryStepForwardAsync(PlaybackStepGranularity.Logical);
 
         await Assert.That(result.Moved).IsTrue();
         await Assert.That(result.DebugLabel).IsEqualTo("inner");
@@ -339,7 +414,7 @@ public sealed class TransportStepTests
     [Test]
     public async Task GetNearestDebugLabels_ReturnsRecordsNearCurrentTime()
     {
-        var playback = Playback.Create(LogicalStepScenario);
+        var playback = Playback.Start(LogicalStepScenario);
 
         await playback.RunToEndAsync();
 
@@ -350,7 +425,7 @@ public sealed class TransportStepTests
     public async Task AsyncPlaybackTaskOfT_CanReturnValueFromHelperMethod()
     {
         var events = new List<string>();
-        var playback = Playback.Create(r => TypedHelperScenario(r, events));
+        var playback = Playback.Start(r => TypedHelperScenario(r, events));
 
         await playback.RunToEndAsync();
 
@@ -363,7 +438,7 @@ public sealed class TransportStepTests
     public async Task EffectAsync_RunsForwardAndUserStoresResult()
     {
         var events = new List<string>();
-        var playback = Playback.Create(r => EffectStoreScenario(r, events));
+        var playback = Playback.Start(r => EffectStoreScenario(r, events));
 
         await playback.RunToEndAsync();
 
@@ -376,7 +451,7 @@ public sealed class TransportStepTests
     public async Task EffectAsync_DoesNotReplayForwardEffectWhenMovingBackwardAcrossIt()
     {
         var events = new List<string>();
-        var playback = Playback.Create(r => ForwardOnlyEffectScenario(r, events));
+        var playback = Playback.Start(r => ForwardOnlyEffectScenario(r, events));
 
         await playback.RunToEndAsync();
         await Assert.That(Joined(events)).IsEqualTo("effect,after");
@@ -392,12 +467,12 @@ public sealed class TransportStepTests
     public async Task EffectAsync_RunsUserRestoreLogicOnBackward()
     {
         var events = new List<string>();
-        var playback = Playback.Create(r => BackwardEffectScenario(r, events));
+        var playback = Playback.Start(r => BackwardEffectScenario(r, events));
 
         await playback.RunToEndAsync();
         events.Clear();
 
-        await MoveBackAsync(playback);
+        await StepBackAsync(playback);
 
         await Assert.That(Joined(events)).IsEqualTo("restore:forward");
     }
@@ -406,12 +481,12 @@ public sealed class TransportStepTests
     public async Task EffectAsync_RunsNestedUserRestoreLogicOnBackward()
     {
         var events = new List<string>();
-        var playback = Playback.Create(r => BackwardNestedEffectScenario(r, events));
+        var playback = Playback.Start(r => BackwardNestedEffectScenario(r, events));
 
         await playback.RunToEndAsync();
         events.Clear();
 
-        await MoveBackAsync(playback);
+        await StepBackAsync(playback);
 
         await Assert.That(Joined(events)).IsEqualTo("restore:forward");
     }
@@ -420,7 +495,7 @@ public sealed class TransportStepTests
     public async Task EffectAsync_ExceptionFlowsThroughAwait()
     {
         var events = new List<string>();
-        var playback = Playback.Create(r => EffectExceptionScenario(r, events));
+        var playback = Playback.Start(r => EffectExceptionScenario(r, events));
 
         await playback.RunToEndAsync();
 
@@ -431,42 +506,42 @@ public sealed class TransportStepTests
     public async Task EffectAsync_ReceivesTransportCancellationToken()
     {
         var events = new List<string>();
-        var playback = Playback.Create(r => EffectCancellationScenario(r, events));
+        var playback = Playback.Start(r => EffectCancellationScenario(r, events));
         using var cancellation = new CancellationTokenSource();
         await cancellation.CancelAsync();
 
-        await MoveNextAsync(playback, cancellation.Token);
-        await MoveNextAsync(playback);
+        await StepForwardAsync(playback, cancellation.Token);
+        await StepForwardAsync(playback);
 
         await Assert.That(Joined(events)).IsEqualTo("cancelled");
     }
 
-    private static async Task<MoveResult> MoveNextAsync(
+    private static async Task<StepResult> StepForwardAsync(
         Playback playback,
         CancellationToken cancellationToken = default
     )
     {
-        var result = await playback.TryMoveNextAsync(cancellationToken);
+        var result = await playback.TryStepForwardAsync(cancellationToken);
         await Assert.That(result.Moved).IsTrue();
         return result;
     }
 
-    private static async Task<MoveResult> MoveBackAsync(Playback playback)
+    private static async Task<StepResult> StepBackAsync(Playback playback)
     {
-        var result = await playback.TryMoveBackAsync();
+        var result = await playback.TryStepBackAsync();
         await Assert.That(result.Moved).IsTrue();
         return result;
     }
 
-    private static async Task AssertMoveNextFalseAsync(Playback playback)
+    private static async Task AssertStepForwardFalseAsync(Playback playback)
     {
-        var result = await playback.TryMoveNextAsync();
+        var result = await playback.TryStepForwardAsync();
         await Assert.That(result.Moved).IsFalse();
     }
 
-    private static async Task AssertMoveBackFalseAsync(Playback playback)
+    private static async Task AssertStepBackFalseAsync(Playback playback)
     {
-        var result = await playback.TryMoveBackAsync();
+        var result = await playback.TryStepBackAsync();
         await Assert.That(result.Moved).IsFalse();
     }
 
@@ -776,5 +851,25 @@ public sealed class TransportStepTests
                 .Records.Select(static record => record.DebugLabel)
                 .Where(static label => !label.StartsWith("entry ", StringComparison.Ordinal))
         );
+    }
+
+    private sealed class ManualTimeProvider : TimeProvider
+    {
+        private long timestamp;
+
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+
+        public override long GetTimestamp()
+        {
+            return timestamp;
+        }
+
+        public void Advance(TimeSpan elapsed)
+        {
+            if (elapsed < TimeSpan.Zero)
+                throw new ArgumentOutOfRangeException(nameof(elapsed));
+
+            timestamp += elapsed.Ticks;
+        }
     }
 }

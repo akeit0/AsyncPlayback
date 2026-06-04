@@ -1,6 +1,6 @@
 using AsyncPlayback;
 
-var playback = Playback.Create(CheckoutWorkflow);
+var playback = Playback.Start(CheckoutWorkflow);
 
 await MoveForwardAsync(playback, "first forward");
 await MoveBackwardAsync(playback, "undo");
@@ -11,7 +11,8 @@ static async Task MoveForwardAsync(Playback playback, string label)
 
     var lastState = "";
     while (
-        (await playback.TryMoveNextAsync(PlaybackStepGranularity.Logical)) is { Moved: true } result
+        (await playback.TryStepForwardAsync(PlaybackStepGranularity.Logical))
+            is { Moved: true } result
     )
     {
         DumpStep(result);
@@ -25,7 +26,7 @@ static async Task MoveBackwardAsync(Playback playback, string label)
 
     var lastState = "";
     while (
-        (await playback.TryMoveBackAsync(PlaybackStepGranularity.Logical)) is { Moved: true } result
+        (await playback.TryStepBackAsync(PlaybackStepGranularity.Logical)) is { Moved: true } result
     )
     {
         DumpStep(result);
@@ -223,7 +224,7 @@ static void DumpStoredState(Playback playback, ref string lastState)
     lastState = currentState;
 }
 
-static void DumpStep(MoveResult result)
+static void DumpStep(StepResult result)
 {
     if (result.DebugLabel == null)
         return;

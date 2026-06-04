@@ -11,7 +11,9 @@ internal sealed class TimelineCheckpoint
         PlaybackPromiseBase? awaitedPromise,
         TimelineRecord? resumeScope,
         int recordCountAtCapture,
-        StoreSnapshot storeSnapshot
+        StoreSnapshot storeSnapshot,
+        long timestamp,
+        TimeSpan deltaTime
     )
     {
         Sequence = sequence;
@@ -23,6 +25,8 @@ internal sealed class TimelineCheckpoint
         ResumeScope = resumeScope;
         RecordCountAtCapture = recordCountAtCapture;
         StoreSnapshot = storeSnapshot;
+        Timestamp = timestamp;
+        DeltaTime = deltaTime;
     }
 
     public long Sequence { get; }
@@ -34,6 +38,8 @@ internal sealed class TimelineCheckpoint
     public TimelineRecord? ResumeScope { get; }
     public int RecordCountAtCapture { get; }
     public StoreSnapshot StoreSnapshot { get; internal set; }
+    public long Timestamp { get; }
+    public TimeSpan DeltaTime { get; }
 }
 
 internal sealed class StoreSnapshot

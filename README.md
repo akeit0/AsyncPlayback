@@ -6,16 +6,16 @@ Just for fun.
 ```cs
 using AsyncPlayback;
 
-var playback = Playback.Create(Scenario);
+var playback = Playback.Start(Scenario);
 
 Console.WriteLine("-- forward --");
-while ((await playback.TryMoveNextAsync()).Moved)
+while ((await playback.TryStepForwardAsync()).Moved)
 {
     Console.WriteLine("th");
 }
 
 Console.WriteLine("-- back --");
-while ((await playback.TryMoveBackAsync()).Moved)
+while ((await playback.TryStepBackAsync()).Moved)
 {
     Console.WriteLine("th");
 }
@@ -25,7 +25,7 @@ static async PlaybackTask Scenario(Playback playback)
     for (var i = 0; i < 3; i++)
     {
         Console.Write(i);
-        await r.Checkpoint();
+        await playback.Checkpoint();
     }
 }
 
@@ -44,21 +44,24 @@ static async PlaybackTask Scenario(Playback playback)
 
 ## API notes
 
-`TryMoveNextAsync()` and `TryMoveBackAsync()` move to the next recorded await point.
+For the runtime model, timeline records, transport behavior, and TimeProvider
+integration, see [doc/how-it-works.md](doc/how-it-works.md).
+
+`TryStepForwardAsync()` and `TryStepBackAsync()` move to the next recorded await point.
 Use logical granularity when you want user-facing steps and want to skip helper method
 entry/call plumbing:
 
 ```cs
-while ((await r.TryMoveNextAsync(PlaybackStepGranularity.Logical)).Moved)
+while ((await r.TryStepForwardAsync(PlaybackStepGranularity.Logical)).Moved)
 {
     Console.WriteLine(r.CurrentRecord?.DebugLabel);
 }
 ```
 
-`MoveResult` also reports the boundary that was reached:
+`StepResult` also reports the boundary that was reached:
 
 ```cs
-var step = await r.TryMoveBackAsync(PlaybackStepGranularity.Logical);
+var step = await r.TryStepBackAsync(PlaybackStepGranularity.Logical);
 Console.WriteLine($"{step.DebugLabel} {step.BoundaryKind}");
 ```
 
@@ -99,16 +102,19 @@ static async PlaybackTask<int> LoadValue(Playback r)
 ```cs
 using AsyncPlayback;
 
-var playback = Playback.Create(Scenario);
+var playback = Playback.Start(Scenario);
 
-Console.WriteLine("-- forward --");
+Console.WriteLine("-- forward realtime --");
 for (var i = 0; i < 8; i++)
-    await playback.AdvanceByAsync(TimeSpan.FromSeconds(0.25));
+{
+    await Task.Delay(TimeSpan.FromSeconds(0.25), playback.TimeProvider);
+    await playback.AdvanceByElapsedTimeAsync();
+}
 
-Console.WriteLine("-- back --");
+Console.WriteLine("-- back commanded --");
 for (var i = 0; i < 5; i++)
 {
-    await playback.AdvanceByAsync(-TimeSpan.FromSeconds(0.4));
+    await playback.MoveByAsync(-TimeSpan.FromSeconds(0.4));
     Console.WriteLine($"current time: {playback.Time}");
 }
 

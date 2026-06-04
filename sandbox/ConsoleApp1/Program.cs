@@ -1,15 +1,18 @@
 using AsyncPlayback;
 
-var playback = Playback.Create(Scenario);
+var playback = Playback.Start(Scenario, TimeProvider.System);
 
-Console.WriteLine("-- forward --");
+Console.WriteLine("-- forward realtime --");
 for (var i = 0; i < 8; i++)
-    await playback.AdvanceByAsync(TimeSpan.FromSeconds(0.25));
+{
+    await Task.Delay(TimeSpan.FromSeconds(0.25), playback.TimeProvider);
+    await playback.AdvanceByElapsedTimeAsync();
+}
 
-Console.WriteLine("-- back --");
+Console.WriteLine("-- back commanded --");
 for (var i = 0; i < 5; i++)
 {
-    await playback.AdvanceByAsync(-TimeSpan.FromSeconds(0.4));
+    await playback.MoveByAsync(-TimeSpan.FromSeconds(0.4));
     Console.WriteLine($"current time: {playback.Time}");
 }
 

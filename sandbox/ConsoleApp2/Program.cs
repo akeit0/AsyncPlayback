@@ -1,15 +1,15 @@
-﻿using AsyncPlayback;
+using AsyncPlayback;
 
-var playback = Playback.Create(Scenario);
+var playback = Playback.Start(Scenario);
 
 Console.WriteLine("-- forward --");
-while ((await playback.TryMoveNextAsync()).Moved)
+while ((await playback.TryStepForwardAsync()).Moved)
 {
     Console.WriteLine("th");
 }
 
 Console.WriteLine("-- back --");
-while ((await playback.TryMoveBackAsync()).Moved)
+while ((await playback.TryStepBackAsync()).Moved)
 {
     Console.WriteLine("th");
 }

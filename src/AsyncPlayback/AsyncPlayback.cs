@@ -13,9 +13,11 @@ public readonly record struct TransportOptions(TransportEvaluation Evaluation, b
     public static TransportOptions Traverse { get; } = new(TransportEvaluation.Traverse, true);
 }
 
-public readonly record struct MoveResult(
+public readonly record struct StepResult(
     bool Moved,
     TimeSpan Time,
+    long Timestamp,
+    TimeSpan DeltaTime = default,
     TimelineRecordInfo? Record = null,
     PlaybackBoundaryKind? BoundaryKind = null
 )
@@ -30,7 +32,10 @@ public sealed class Playback
     private readonly Queue<Action> ready = [];
     private readonly SemaphoreSlim readySignal = new(0);
     private readonly List<TimelineRecord> records = [];
+    private bool hasTimestamp;
+    private int suppressAwaitPointTimestampSamplingDepth;
     private object? storedState;
+    private long timestamp;
     private long checkpointSequence;
     private TimelineRecord? currentRecord;
     private CheckpointTimelineRecord? pendingForwardCheckpoint;
@@ -52,6 +57,9 @@ public sealed class Playback
     public TimeSpan Time { get; private set; }
 
     public PlaybackDirection CurrentDirection => currentDirection;
+    public TimeProvider TimeProvider { get; }
+    public long Timestamp => timestamp;
+    public TimeSpan DeltaTime { get; private set; }
     public bool DebugLogging { get; set; }
     public PlaybackMode Mode { get; private set; } = PlaybackMode.Recording;
 
@@ -146,9 +154,18 @@ public sealed class Playback
 
     internal bool SuppressCheckpointAutoContinuation => suppressCheckpointAutoContinuationDepth > 0;
 
-    public static Playback Create(Func<Playback, PlaybackTask> entry)
+    public Playback(TimeProvider? timeProvider = null)
     {
-        var playback = new Playback();
+        TimeProvider = timeProvider ?? global::System.TimeProvider.System;
+        ResetTimestamp();
+    }
+
+    public static Playback Start(
+        Func<Playback, PlaybackTask> entry,
+        TimeProvider? timeProvider = null
+    )
+    {
+        var playback = new Playback(timeProvider);
         playback.Start(entry);
         return playback;
     }
@@ -166,6 +183,7 @@ public sealed class Playback
         Time = TimeSpan.Zero;
         Mode = PlaybackMode.Recording;
         playbackRecordIndex = 0;
+        ResetTimestamp();
         ClearStoredState();
 
         PlaybackRuntime.Pushplayback(this);
@@ -342,15 +360,15 @@ public sealed class Playback
         return new(promise);
     }
 
-    public ValueTask AdvanceByAsync(
+    public ValueTask MoveByAsync(
         TimeSpan virtualDelta,
         CancellationToken cancellationToken = default
     )
     {
-        return AdvanceByAsync(virtualDelta, TransportOptions.Traverse, cancellationToken);
+        return MoveByAsync(virtualDelta, TransportOptions.Traverse, cancellationToken);
     }
 
-    public ValueTask AdvanceByAsync(
+    public ValueTask MoveByAsync(
         TimeSpan virtualDelta,
         TransportOptions options,
         CancellationToken cancellationToken = default
@@ -361,67 +379,94 @@ public sealed class Playback
         if (target < TimeSpan.Zero)
             target = TimeSpan.Zero;
 
-        return MoveToAsync(target, options, null, cancellationToken);
+        return TransportToAsync(target, options, null, cancellationToken);
     }
 
-    public ValueTask AdvanceToAsync(
-        TimeSpan targetTime,
+    public ValueTask AdvanceByElapsedTimeAsync(CancellationToken cancellationToken = default)
+    {
+        return AdvanceByElapsedTimeAsync(TransportOptions.Traverse, cancellationToken);
+    }
+
+    public async ValueTask AdvanceByElapsedTimeAsync(
+        TransportOptions options,
         CancellationToken cancellationToken = default
     )
     {
-        return AdvanceToAsync(targetTime, TransportOptions.Traverse, cancellationToken);
+        SampleTimestamp();
+        using var timestampScope = SuppressAwaitPointTimestampSampling();
+        await MoveByAsync(DeltaTime, options, cancellationToken).ConfigureAwait(false);
     }
 
-    public ValueTask AdvanceToAsync(
+    public ValueTask RewindByElapsedTimeAsync(CancellationToken cancellationToken = default)
+    {
+        return RewindByElapsedTimeAsync(TransportOptions.Traverse, cancellationToken);
+    }
+
+    public async ValueTask RewindByElapsedTimeAsync(
+        TransportOptions options,
+        CancellationToken cancellationToken = default
+    )
+    {
+        SampleTimestamp();
+        using var timestampScope = SuppressAwaitPointTimestampSampling();
+        await MoveByAsync(-DeltaTime, options, cancellationToken).ConfigureAwait(false);
+    }
+
+    public ValueTask MoveToAsync(TimeSpan targetTime, CancellationToken cancellationToken = default)
+    {
+        return MoveToAsync(targetTime, TransportOptions.Traverse, cancellationToken);
+    }
+
+    public ValueTask MoveToAsync(
         TimeSpan targetTime,
         TransportOptions options,
         CancellationToken cancellationToken = default
     )
     {
-        return MoveToAsync(targetTime, options, null, cancellationToken);
+        return TransportToAsync(targetTime, options, null, cancellationToken);
     }
 
-    public ValueTask SeekAsync(TimeSpan targetTime, CancellationToken cancellationToken = default)
+    public ValueTask SeekToAsync(TimeSpan targetTime, CancellationToken cancellationToken = default)
     {
-        return SeekAsync(targetTime, TransportOptions.TargetOnly, cancellationToken);
+        return SeekToAsync(targetTime, TransportOptions.TargetOnly, cancellationToken);
     }
 
-    public ValueTask SeekAsync(
+    public ValueTask SeekToAsync(
         TimeSpan targetTime,
         TransportOptions options,
         CancellationToken cancellationToken = default
     )
     {
-        return MoveToAsync(targetTime, options, null, cancellationToken);
+        return TransportToAsync(targetTime, options, null, cancellationToken);
     }
 
-    public ValueTask<MoveResult> TryMoveNextAsync(CancellationToken cancellationToken = default)
+    public ValueTask<StepResult> TryStepForwardAsync(CancellationToken cancellationToken = default)
     {
-        return TryMoveNextAsync(PlaybackStepGranularity.AwaitPoint, cancellationToken);
+        return TryStepForwardAsync(PlaybackStepGranularity.AwaitPoint, cancellationToken);
     }
 
-    public ValueTask<MoveResult> TryMoveNextAsync(
+    public ValueTask<StepResult> TryStepForwardAsync(
         PlaybackStepGranularity granularity,
         CancellationToken cancellationToken = default
     )
     {
-        return TryMoveStepAsync(PlaybackDirection.Forward, granularity, cancellationToken);
+        return TryStepAsync(PlaybackDirection.Forward, granularity, cancellationToken);
     }
 
-    public ValueTask<MoveResult> TryMoveBackAsync(CancellationToken cancellationToken = default)
+    public ValueTask<StepResult> TryStepBackAsync(CancellationToken cancellationToken = default)
     {
-        return TryMoveBackAsync(PlaybackStepGranularity.AwaitPoint, cancellationToken);
+        return TryStepBackAsync(PlaybackStepGranularity.AwaitPoint, cancellationToken);
     }
 
-    public ValueTask<MoveResult> TryMoveBackAsync(
+    public ValueTask<StepResult> TryStepBackAsync(
         PlaybackStepGranularity granularity,
         CancellationToken cancellationToken = default
     )
     {
-        return TryMoveStepAsync(PlaybackDirection.Backward, granularity, cancellationToken);
+        return TryStepAsync(PlaybackDirection.Backward, granularity, cancellationToken);
     }
 
-    private async ValueTask<MoveResult> TryMoveStepAsync(
+    private async ValueTask<StepResult> TryStepAsync(
         PlaybackDirection direction,
         PlaybackStepGranularity granularity,
         CancellationToken cancellationToken
@@ -449,7 +494,7 @@ public sealed class Playback
             )
                 await EvaluateStepBoundaryAsync(seekStart, direction).ConfigureAwait(false);
 
-            return CreateMoveResult(true, capturedAwaitPoint.Boundary);
+            return CreateStepResult(true, capturedAwaitPoint.Boundary);
         }
 
         if (
@@ -476,32 +521,32 @@ public sealed class Playback
                 )
                     await EvaluateStepBoundaryAsync(seekStart, direction).ConfigureAwait(false);
 
-                return CreateMoveResult(true, capturedAwaitPoint.Boundary);
+                return CreateStepResult(true, capturedAwaitPoint.Boundary);
             }
         }
 
         var boundary = FindStepBoundary(direction, granularity);
         if (boundary == null)
-            return CreateMoveResult(false, null);
+            return CreateStepResult(false, null);
 
         await EvaluateStepBoundaryAsync(boundary.Value, direction).ConfigureAwait(false);
 
         boundaryCursor = new(direction, boundary.Value);
-        return CreateMoveResult(true, boundary);
+        return CreateStepResult(true, boundary);
     }
 
     public async ValueTask RunToEndAsync(CancellationToken cancellationToken = default)
     {
         EnsureStarted();
 
-        while ((await TryMoveNextAsync(cancellationToken).ConfigureAwait(false)).Moved) { }
+        while ((await TryStepForwardAsync(cancellationToken).ConfigureAwait(false)).Moved) { }
     }
 
     public async ValueTask RunBackToStartAsync(CancellationToken cancellationToken = default)
     {
         EnsureStarted();
 
-        while ((await TryMoveBackAsync(cancellationToken).ConfigureAwait(false)).Moved) { }
+        while ((await TryStepBackAsync(cancellationToken).ConfigureAwait(false)).Moved) { }
     }
 
     private async ValueTask RunReadyAsync(CancellationToken cancellationToken = default)
@@ -653,7 +698,9 @@ public sealed class Playback
             null,
             parentRecord,
             records.Count,
-            CaptureStoreSnapshot()
+            CaptureStoreSnapshot(),
+            Timestamp,
+            DeltaTime
         );
 
         record.EntryCheckpoint = checkpoint;
@@ -731,7 +778,9 @@ public sealed class Playback
             null,
             resumeScope,
             records.Count,
-            CaptureStoreSnapshot()
+            CaptureStoreSnapshot(),
+            Timestamp,
+            DeltaTime
         );
 
         // Always update: during playback the runner/checkpoint id can be rebound.
@@ -771,6 +820,9 @@ public sealed class Playback
         TimelineRecord? resumeScope
     )
     {
+        if (suppressAwaitPointTimestampSamplingDepth == 0)
+            SampleTimestamp();
+
         var checkpoint = new TimelineCheckpoint(
             ++checkpointSequence,
             runner,
@@ -780,7 +832,9 @@ public sealed class Playback
             awaitedPromise,
             resumeScope,
             records.Count,
-            CaptureStoreSnapshot()
+            CaptureStoreSnapshot(),
+            Timestamp,
+            DeltaTime
         );
 
         if (ownerRecord != null)
@@ -839,7 +893,7 @@ public sealed class Playback
             );
     }
 
-    private async ValueTask MoveToAsync(
+    private async ValueTask TransportToAsync(
         TimeSpan targetTime,
         TransportOptions options,
         PlaybackDirection? directionOverride,
@@ -2060,6 +2114,47 @@ public sealed class Playback
         Time = time;
     }
 
+    private void ResetTimestamp()
+    {
+        timestamp = TimeProvider.GetTimestamp();
+        DeltaTime = TimeSpan.Zero;
+        hasTimestamp = true;
+    }
+
+    private void SampleTimestamp()
+    {
+        var previous = timestamp;
+        var current = TimeProvider.GetTimestamp();
+
+        timestamp = current;
+        DeltaTime = hasTimestamp ? TimeProvider.GetElapsedTime(previous, current) : TimeSpan.Zero;
+        hasTimestamp = true;
+    }
+
+    private TimestampSamplingScope SuppressAwaitPointTimestampSampling()
+    {
+        suppressAwaitPointTimestampSamplingDepth++;
+        return new(this);
+    }
+
+    private readonly struct TimestampSamplingScope : IDisposable
+    {
+        private readonly Playback playback;
+
+        public TimestampSamplingScope(Playback playback)
+        {
+            this.playback = playback;
+        }
+
+        public void Dispose()
+        {
+            playback.suppressAwaitPointTimestampSamplingDepth--;
+
+            if (playback.suppressAwaitPointTimestampSamplingDepth < 0)
+                throw new InvalidOperationException("Timestamp sampling suppression underflow.");
+        }
+    }
+
     private IReadOnlyList<TimelineRecordInfo> GetRecordInfos()
     {
         var result = new TimelineRecordInfo[records.Count];
@@ -2070,11 +2165,13 @@ public sealed class Playback
         return result;
     }
 
-    private MoveResult CreateMoveResult(bool moved, TimelineBoundary? boundary)
+    private StepResult CreateStepResult(bool moved, TimelineBoundary? boundary)
     {
         return new(
             moved,
             Time,
+            Timestamp,
+            DeltaTime,
             boundary?.Record.ToInfo(),
             boundary == null ? null : ToPublicBoundaryKind(boundary.Value.Kind)
         );

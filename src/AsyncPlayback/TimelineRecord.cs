@@ -8,7 +8,9 @@ public readonly struct TimelineRecordInfo
         TimeSpan startTime,
         TimeSpan duration,
         string debugLabel,
-        int? parentId
+        int? parentId,
+        long? timestamp,
+        TimeSpan? deltaTime
     )
     {
         Id = id;
@@ -17,6 +19,8 @@ public readonly struct TimelineRecordInfo
         Duration = duration;
         DebugLabel = debugLabel;
         ParentId = parentId;
+        Timestamp = timestamp;
+        DeltaTime = deltaTime;
     }
 
     public int Id { get; }
@@ -26,6 +30,8 @@ public readonly struct TimelineRecordInfo
     public TimeSpan EndTime => StartTime + Duration;
     public string DebugLabel { get; }
     public int? ParentId { get; }
+    public long? Timestamp { get; }
+    public TimeSpan? DeltaTime { get; }
 
     public override string ToString()
     {
@@ -79,7 +85,16 @@ internal abstract class TimelineRecord
 
     public TimelineRecordInfo ToInfo()
     {
-        return new(Id, Kind, StartTime, Duration, DebugLabel, Parent?.Id);
+        return new(
+            Id,
+            Kind,
+            StartTime,
+            Duration,
+            DebugLabel,
+            Parent?.Id,
+            EntryCheckpoint?.Timestamp,
+            EntryCheckpoint?.DeltaTime
+        );
     }
 
     public virtual void ResetPlaybackState() { }
