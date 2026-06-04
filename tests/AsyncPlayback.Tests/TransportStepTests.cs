@@ -217,6 +217,29 @@ public sealed class TransportStepTests
     }
 
     [Test]
+    public async Task EffectAsync_UsesProviderElapsedTimeAsTimelineDuration()
+    {
+        var timeProvider = new FakeTimeProvider();
+        var events = new List<string>();
+        var playback = Playback.Start(
+            r => TimedEffectScenario(r, events, timeProvider),
+            timeProvider
+        );
+
+        await playback.RunToEndAsync();
+
+        var effect = playback.Records.Single(static record =>
+            record is { Kind: TimelineRecordKind.Effect, DebugLabel: "timed effect" }
+        );
+
+        await Assert.That(effect.StartTime).IsEqualTo(TimeSpan.Zero);
+        await Assert.That(effect.Duration).IsEqualTo(TimeSpan.FromMilliseconds(300));
+        await Assert.That(effect.EndTime).IsEqualTo(TimeSpan.FromMilliseconds(300));
+        await Assert.That(playback.Time).IsEqualTo(TimeSpan.FromMilliseconds(300));
+        await Assert.That(Joined(events)).IsEqualTo("effect,after");
+    }
+
+    [Test]
     public async Task MoveByAsync_BackwardAcrossCallStart_DoesNotEnterChildTwice()
     {
         var events = new List<string>();
@@ -754,6 +777,26 @@ public sealed class TransportStepTests
         playback.Store(value);
         events.Add("stored");
         await playback.Checkpoint();
+    }
+
+    private static async PlaybackTask TimedEffectScenario(
+        Playback playback,
+        List<string> events,
+        FakeTimeProvider timeProvider
+    )
+    {
+        await playback.Effect(
+            () =>
+            {
+                events.Add("effect");
+                timeProvider.Advance(TimeSpan.FromMilliseconds(300));
+                return ValueTask.CompletedTask;
+            },
+            "timed effect"
+        );
+
+        events.Add("after");
+        await playback.Checkpoint("after timed effect");
     }
 
     private static async PlaybackTask ForwardOnlyEffectScenario(

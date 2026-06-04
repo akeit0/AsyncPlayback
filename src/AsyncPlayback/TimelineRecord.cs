@@ -161,6 +161,14 @@ internal sealed class EffectRecord : TimelineRecord
     }
 
     public Func<CancellationToken, ValueTask<object?>> ExecuteAsync { get; }
+
+    public void Complete(TimeSpan endTime)
+    {
+        if (endTime < StartTime)
+            endTime = StartTime;
+
+        Duration = endTime - StartTime;
+    }
 }
 
 internal sealed class SeekLoopRecord : TimelineRecord

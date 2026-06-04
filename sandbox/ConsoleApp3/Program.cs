@@ -3,6 +3,10 @@ using AsyncPlayback;
 var playback = Playback.Start(CheckoutWorkflow);
 
 await MoveForwardAsync(playback, "first forward");
+foreach (var r in playback.Records)
+{
+    Console.WriteLine(r);
+}
 await MoveBackwardAsync(playback, "undo");
 
 static async Task MoveForwardAsync(Playback playback, string label)

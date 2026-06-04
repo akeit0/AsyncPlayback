@@ -266,9 +266,16 @@ var data = await playback.Effect(
 ```
 
 An effect is a timeline record, but AsyncPlayback does not pretend the external
-world is rewindable. The effect can be reached again during replay depending on
-the workflow. Code that needs deterministic rewind should store the data needed
-to restore state, and should check playback direction when deciding what to do.
+world is rewindable. When an effect runs while playback is moving forward,
+AsyncPlayback measures provider elapsed time around the external work and uses
+that elapsed time as the effect record duration. If the effect takes 300 ms of
+provider time, the effect occupies 300 ms of virtual playback time.
+
+Backward compensation effects are different. They can perform external restore
+work, and `DeltaTime` still reports provider elapsed time, but they do not add a
+positive span to the forward virtual timeline. Code that needs deterministic
+rewind should store the data needed to restore state, and should check playback
+direction when deciding what to do.
 
 ## TimeProvider
 
@@ -284,6 +291,10 @@ while (!playback.IsCompleted)
     await playback.AdvanceByElapsedTimeAsync();
 }
 ```
+
+Forward effects also sample the same provider on completion. That is why
+external work represented by `Effect` can occupy real elapsed duration in the
+timeline, while commanded movement can still jump without waiting.
 
 `AdvanceByElapsedTimeAsync()` samples `playback.TimeProvider`, computes
 `DeltaTime`, and then moves virtual time forward by that delta. Reverse

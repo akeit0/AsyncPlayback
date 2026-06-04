@@ -263,8 +263,8 @@ public sealed class Playback
         var promise = new PlaybackPromise(this, PlaybackPromiseKind.Effect)
         {
             StartTime = record.StartTime,
-            Duration = TimeSpan.Zero,
-            DueTime = record.StartTime,
+            Duration = record.Duration,
+            DueTime = record.EndTime,
             OwnerRecord = record,
         };
 
@@ -298,8 +298,8 @@ public sealed class Playback
         var promise = new PlaybackPromise<T>(this, PlaybackPromiseKind.Effect)
         {
             StartTime = record.StartTime,
-            Duration = TimeSpan.Zero,
-            DueTime = record.StartTime,
+            Duration = record.Duration,
+            DueTime = record.EndTime,
             OwnerRecord = record,
         };
 
@@ -1873,30 +1873,91 @@ public sealed class Playback
     private void StartEffect(EffectRecord record, PlaybackPromiseBase promise)
     {
         var cancellationToken = currentCancellationToken;
+        var startTimestamp = TimeProvider.GetTimestamp();
+        var direction = currentDirection;
         Interlocked.Increment(ref pendingExternalEffects);
 
-        _ = RunEffectAsync(record, promise, cancellationToken);
+        _ = RunEffectAsync(record, promise, startTimestamp, direction, cancellationToken);
     }
 
     private async Task RunEffectAsync(
         EffectRecord record,
         PlaybackPromiseBase promise,
+        long startTimestamp,
+        PlaybackDirection direction,
         CancellationToken cancellationToken
     )
     {
         try
         {
             var result = await record.ExecuteAsync(cancellationToken).ConfigureAwait(false);
-            Post(() => promise.TrySetObjectResult(result));
+            var endTimestamp = TimeProvider.GetTimestamp();
+            Post(() =>
+                CompleteEffect(record, promise, startTimestamp, endTimestamp, direction, result)
+            );
         }
         catch (Exception exception)
         {
-            Post(() => promise.TrySetException(exception));
+            var endTimestamp = TimeProvider.GetTimestamp();
+            Post(() =>
+                FailEffect(record, promise, startTimestamp, endTimestamp, direction, exception)
+            );
         }
         finally
         {
             Interlocked.Decrement(ref pendingExternalEffects);
             readySignal.Release();
+        }
+    }
+
+    private void CompleteEffect(
+        EffectRecord record,
+        PlaybackPromiseBase promise,
+        long startTimestamp,
+        long endTimestamp,
+        PlaybackDirection direction,
+        object? result
+    )
+    {
+        CompleteEffectRecord(record, promise, startTimestamp, endTimestamp, direction);
+        promise.TrySetObjectResult(result);
+    }
+
+    private void FailEffect(
+        EffectRecord record,
+        PlaybackPromiseBase promise,
+        long startTimestamp,
+        long endTimestamp,
+        PlaybackDirection direction,
+        Exception exception
+    )
+    {
+        CompleteEffectRecord(record, promise, startTimestamp, endTimestamp, direction);
+        promise.TrySetException(exception);
+    }
+
+    private void CompleteEffectRecord(
+        EffectRecord record,
+        PlaybackPromiseBase promise,
+        long startTimestamp,
+        long endTimestamp,
+        PlaybackDirection direction
+    )
+    {
+        var elapsed = TimeProvider.GetElapsedTime(startTimestamp, endTimestamp);
+        if (elapsed < TimeSpan.Zero)
+            elapsed = TimeSpan.Zero;
+
+        timestamp = endTimestamp;
+        DeltaTime = elapsed;
+        hasTimestamp = true;
+
+        if (direction == PlaybackDirection.Forward)
+        {
+            record.Complete(record.StartTime + elapsed);
+            promise.Duration = record.Duration;
+            promise.DueTime = record.EndTime;
+            MoveTimeTo(record.EndTime);
         }
     }
 
