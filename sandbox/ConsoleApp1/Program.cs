@@ -3,7 +3,7 @@ using AsyncPlayback;
 var playback = Playback.Start(Scenario, TimeProvider.System);
 
 Console.WriteLine("-- forward realtime --");
-for (var i = 0; i < 8; i++)
+while (!playback.IsCompleted)
 {
     await Task.Delay(TimeSpan.FromSeconds(0.25), playback.TimeProvider);
     await playback.AdvanceByElapsedTimeAsync();
@@ -12,7 +12,7 @@ for (var i = 0; i < 8; i++)
 Console.WriteLine("-- back commanded --");
 for (var i = 0; i < 5; i++)
 {
-    await playback.MoveByAsync(-TimeSpan.FromSeconds(0.4));
+    await playback.MoveToAsync(TimeSpan.FromSeconds((4 - i) * 0.4));
     Console.WriteLine($"current time: {playback.Time}");
 }
 

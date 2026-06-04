@@ -1,5 +1,6 @@
 using System.Globalization;
 using AsyncPlayback;
+using Microsoft.Extensions.Time.Testing;
 
 namespace AsyncPlayback.Tests;
 
@@ -143,7 +144,7 @@ public sealed class TransportStepTests
     [Test]
     public async Task TryStepForwardAsync_ReportsDeltaTimeFromTimeProvider()
     {
-        var timeProvider = new ManualTimeProvider();
+        var timeProvider = new FakeTimeProvider();
         var events = new List<string>();
         var playback = Playback.Start(r => CheckpointScenario(r, events), timeProvider);
 
@@ -159,7 +160,7 @@ public sealed class TransportStepTests
     [Test]
     public async Task TryStepForwardAsync_UpdatesTimestampAtReachedAwaitPoint()
     {
-        var timeProvider = new ManualTimeProvider();
+        var timeProvider = new FakeTimeProvider();
         var playback = Playback.Start(r => CheckpointScenario(r, []), timeProvider);
 
         timeProvider.Advance(TimeSpan.FromMilliseconds(100));
@@ -183,7 +184,7 @@ public sealed class TransportStepTests
     [Test]
     public async Task AdvanceByElapsedTimeAsync_MovesByTimeProviderDelta()
     {
-        var timeProvider = new ManualTimeProvider();
+        var timeProvider = new FakeTimeProvider();
         var events = new List<string>();
         var playback = Playback.Start(r => SeekLoopScenario(r, events), timeProvider);
 
@@ -199,7 +200,7 @@ public sealed class TransportStepTests
     [Test]
     public async Task RewindByElapsedTimeAsync_MovesBackByTimeProviderDelta()
     {
-        var timeProvider = new ManualTimeProvider();
+        var timeProvider = new FakeTimeProvider();
         var events = new List<string>();
         var playback = Playback.Start(r => SeekLoopScenario(r, events), timeProvider);
 
@@ -213,6 +214,21 @@ public sealed class TransportStepTests
         await Assert.That(playback.Time).IsEqualTo(TimeSpan.FromMilliseconds(600));
         await Assert.That(playback.DeltaTime).IsEqualTo(TimeSpan.FromMilliseconds(400));
         await Assert.That(Joined(events)).IsEqualTo("seek:0.6");
+    }
+
+    [Test]
+    public async Task MoveByAsync_BackwardAcrossCallStart_DoesNotEnterChildTwice()
+    {
+        var events = new List<string>();
+        var playback = Playback.Start(r => NestedSeekLoopScenario(r, events));
+
+        await playback.MoveToAsync(TimeSpan.FromSeconds(2));
+        events.Clear();
+
+        for (var i = 0; i < 4; i++)
+            await playback.MoveByAsync(-TimeSpan.FromSeconds(0.4));
+
+        await Assert.That(events.Count(static value => value == "child:start")).IsEqualTo(1);
     }
 
     [Test]
@@ -560,6 +576,39 @@ public sealed class TransportStepTests
             events.Add("seek:" + progress.Progress.ToString("0.###", CultureInfo.InvariantCulture));
     }
 
+    private static async PlaybackTask NestedSeekLoopScenario(Playback playback, List<string> events)
+    {
+        events.Add("root:start");
+
+        await foreach (var progress in playback.ForEachOnSeek(TimeSpan.FromSeconds(0.5)))
+            events.Add(
+                "root:a:" + progress.Progress.ToString("0.###", CultureInfo.InvariantCulture)
+            );
+
+        await NestedSeekLoopChild(playback, events);
+
+        events.Add("root:after-child");
+
+        await foreach (var progress in playback.ForEachOnSeek(TimeSpan.FromSeconds(0.5)))
+            events.Add(
+                "root:b:" + progress.Progress.ToString("0.###", CultureInfo.InvariantCulture)
+            );
+
+        events.Add("root:end");
+    }
+
+    private static async PlaybackTask NestedSeekLoopChild(Playback playback, List<string> events)
+    {
+        events.Add("child:start");
+
+        await foreach (var progress in playback.ForEachOnSeek(TimeSpan.FromSeconds(1)))
+            events.Add(
+                "child:loop:" + progress.Progress.ToString("0.###", CultureInfo.InvariantCulture)
+            );
+
+        events.Add("child:end");
+    }
+
     private static async PlaybackTask DelayScenario(Playback playback, List<string> events)
     {
         events.Add("delay:start");
@@ -853,23 +902,4 @@ public sealed class TransportStepTests
         );
     }
 
-    private sealed class ManualTimeProvider : TimeProvider
-    {
-        private long timestamp;
-
-        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
-
-        public override long GetTimestamp()
-        {
-            return timestamp;
-        }
-
-        public void Advance(TimeSpan elapsed)
-        {
-            if (elapsed < TimeSpan.Zero)
-                throw new ArgumentOutOfRangeException(nameof(elapsed));
-
-            timestamp += elapsed.Ticks;
-        }
-    }
 }

@@ -1385,7 +1385,11 @@ public sealed class Playback
                     // Checkpoints are source-segment boundaries. Forward execution
                     // reaches them naturally via RunReady(); direct evaluation is only
                     // needed for backward traversal / target sampling.
-                    if (direction == PlaybackDirection.Backward && checkpoint.StartTime == time)
+                    if (
+                        direction == PlaybackDirection.Backward
+                        && checkpoint.CheckpointKind != CheckpointRecordKind.Implicit
+                        && checkpoint.StartTime == time
+                    )
                         result.Add(checkpoint);
                     break;
             }
