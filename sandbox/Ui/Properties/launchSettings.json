@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "Ui (Desktop)": {
+      "commandName": "Project",
+      "compatibleTargetFramework": "desktop"
+    }
+  }
+}
