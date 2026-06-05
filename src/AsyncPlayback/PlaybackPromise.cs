@@ -25,7 +25,7 @@ public abstract class PlaybackPromiseBase
     public TimeSpan StartTime { get; set; }
     public TimeSpan Duration { get; set; }
     public TimeSpan DueTime { get; set; }
-    internal TimelineRecord? OwnerRecord { get; set; }
+    internal int? OwnerRecordIndex { get; set; }
 
     public bool IsCompleted => status != PromiseStatus.Pending;
     internal IPlaybackRunner? Runner { get; private set; }
@@ -78,7 +78,7 @@ public abstract class PlaybackPromiseBase
         IPlaybackRunner runner,
         int checkpointId,
         long expectedEpoch,
-        TimelineRecord? resumeScope
+        int? resumeScope
     )
     {
         var continuation = PendingContinuation.ForRunner(
@@ -185,13 +185,13 @@ public abstract class PlaybackPromiseBase
         private readonly IPlaybackRunner runner;
         private readonly int checkpointId;
         private readonly long expectedEpoch;
-        private readonly TimelineRecord? resumeScope;
+        private readonly int? resumeScope;
 
         public RunnerContinuation(
             IPlaybackRunner runner,
             int checkpointId,
             long expectedEpoch,
-            TimelineRecord? resumeScope
+            int? resumeScope
         )
         {
             this.runner = runner;
@@ -205,7 +205,6 @@ public abstract class PlaybackPromiseBase
             runner.ResumeFromAwait(checkpointId, expectedEpoch, resumeScope);
         }
     }
-
 }
 
 internal sealed class PlaybackPromise : PlaybackPromiseBase

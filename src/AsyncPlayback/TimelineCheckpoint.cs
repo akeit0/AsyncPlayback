@@ -9,7 +9,7 @@ internal sealed class TimelineCheckpoint
         TimeSpan time,
         PlaybackPromiseKind awaitKind,
         PlaybackPromiseBase? awaitedPromise,
-        TimelineRecord? resumeScope,
+        int? resumeScope,
         int recordCountAtCapture,
         long timestamp,
         TimeSpan deltaTime
@@ -33,7 +33,7 @@ internal sealed class TimelineCheckpoint
     public TimeSpan Time { get; }
     public PlaybackPromiseKind AwaitKind { get; }
     public PlaybackPromiseBase? AwaitedPromise { get; }
-    public TimelineRecord? ResumeScope { get; }
+    public int? ResumeScope { get; }
     public int RecordCountAtCapture { get; }
     public long Timestamp { get; }
     public TimeSpan DeltaTime { get; }

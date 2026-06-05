@@ -47,7 +47,11 @@ public sealed class Playback
 
     private static readonly Action<PostedCheckpointResume> ResumeCheckpoint = static resume =>
     {
-        resume.Runner.ResumeFromAwait(resume.CheckpointId, resume.ExpectedEpoch, resume.ResumeScope);
+        resume.Runner.ResumeFromAwait(
+            resume.CheckpointId,
+            resume.ExpectedEpoch,
+            resume.ResumeScope
+        );
     };
 
     private static readonly Action<PostedEffectCompletion> CompletePostedEffect =
@@ -84,8 +88,8 @@ public sealed class Playback
     private int suppressAwaitPointTimestampSamplingDepth;
     private long timestamp;
     private long checkpointSequence;
-    private TimelineRecord? currentRecord;
-    private CheckpointTimelineRecord? pendingForwardCheckpoint;
+    private int? currentRecordIndex;
+    private int? pendingForwardCheckpointIndex;
     private BoundaryCursor? boundaryCursor;
     private int nextRecordId;
     private int playbackRecordIndex;
@@ -115,7 +119,8 @@ public sealed class Playback
     public bool IsCompleted { get; private set; }
 
     public IReadOnlyList<TimelineRecordInfo> Records => GetRecordInfos();
-    public TimelineRecordInfo? CurrentRecord => currentRecord?.ToInfo();
+    public TimelineRecordInfo? CurrentRecord =>
+        currentRecordIndex is { } index ? GetRecord(index).ToInfo() : null;
 
     public CheckpointAwaitable Checkpoint(string debugLabel = "Checkpoint") =>
         new(this, debugLabel);
@@ -175,7 +180,7 @@ public sealed class Playback
         if (count <= 0)
             return [];
 
-        var currentIndex = currentRecord?.FlatIndex ?? -1;
+        var currentIndex = currentRecordIndex ?? -1;
 
         return records
             .OrderBy(record => AbsTicks(record.StartTime - Time))
@@ -264,7 +269,7 @@ public sealed class Playback
             StartTime = record.StartTime,
             Duration = record.Duration,
             DueTime = record.EndTime,
-            OwnerRecord = record,
+            OwnerRecordIndex = record.FlatIndex,
         };
 
         recordRuntime.ArmDelay(record.FlatIndex, promise);
@@ -307,7 +312,7 @@ public sealed class Playback
             StartTime = record.StartTime,
             Duration = record.Duration,
             DueTime = record.EndTime,
-            OwnerRecord = record,
+            OwnerRecordIndex = record.FlatIndex,
         };
 
         StartEffect(record, promise);
@@ -342,7 +347,7 @@ public sealed class Playback
             StartTime = record.StartTime,
             Duration = record.Duration,
             DueTime = record.EndTime,
-            OwnerRecord = record,
+            OwnerRecordIndex = record.FlatIndex,
         };
 
         StartEffect(record, promise);
@@ -354,13 +359,18 @@ public sealed class Playback
         EnsureCurrentPlayback();
 
         var record = GetOrCreateSeekLoopRecord(duration, debugLabel);
-        return new(this, record);
+        return new(this, record.FlatIndex);
     }
 
-    internal PlaybackTask<bool> ArmSeekLoopMoveNext(SeekLoopRecord record)
+    internal SeekLoopRecord GetSeekLoopRecord(int recordIndex)
     {
-        if (record == null)
-            throw new ArgumentNullException(nameof(record));
+        return GetRecord(recordIndex) as SeekLoopRecord
+            ?? throw new InvalidOperationException("Record index does not refer to a seek loop.");
+    }
+
+    internal PlaybackTask<bool> ArmSeekLoopMoveNext(int recordIndex)
+    {
+        var record = GetSeekLoopRecord(recordIndex);
 
         var suppressExit =
             Time >= record.EndTime
@@ -381,7 +391,7 @@ public sealed class Playback
             StartTime = record.StartTime,
             Duration = record.Duration,
             DueTime = record.EndTime,
-            OwnerRecord = ownerRecord,
+            OwnerRecordIndex = ownerRecord.FlatIndex,
         };
 
         if (isExitMoveNext)
@@ -405,9 +415,32 @@ public sealed class Playback
         return new(promise);
     }
 
-    internal TimeSpan GetSeekLoopElapsed(SeekLoopRecord record)
+    internal TimeSpan GetSeekLoopElapsed(int recordIndex)
     {
-        return recordRuntime.GetSeekLoopElapsed(record.FlatIndex);
+        return recordRuntime.GetSeekLoopElapsed(recordIndex);
+    }
+
+    internal TimelineRecord GetRecord(int recordIndex)
+    {
+        if ((uint)recordIndex >= (uint)records.Count)
+            throw new ArgumentOutOfRangeException(nameof(recordIndex));
+
+        return records[recordIndex];
+    }
+
+    private TimelineRecord? GetCurrentRecord()
+    {
+        return currentRecordIndex is { } index ? GetRecord(index) : null;
+    }
+
+    private void SetCurrentRecord(TimelineRecord? record)
+    {
+        currentRecordIndex = record?.FlatIndex;
+    }
+
+    private void SetCurrentRecord(int? recordIndex)
+    {
+        currentRecordIndex = recordIndex;
     }
 
     public ValueTask MoveByAsync(
@@ -626,10 +659,7 @@ public sealed class Playback
 
         if (capturedAwaitPoint.Stopped)
         {
-            if (
-                capturedAwaitPoint.Boundary is
-                { Record: SeekLoopRecord, Kind: TimelineBoundaryKind.Start } seekStart
-            )
+            if (capturedAwaitPoint.Boundary is { } seekStart && IsSeekLoopStartBoundary(seekStart))
                 await EvaluateStepBoundaryAsync(seekStart, direction).ConfigureAwait(false);
 
             return CreateStepResult(true, capturedAwaitPoint.Boundary);
@@ -638,11 +668,13 @@ public sealed class Playback
         if (
             direction == PlaybackDirection.Forward
             && !HasReady()
-            && pendingForwardCheckpoint is { EntryCheckpoint: not null } checkpoint
+            && pendingForwardCheckpointIndex is { } pendingCheckpointIndex
+            && GetRecord(pendingCheckpointIndex)
+                is CheckpointTimelineRecord { EntryCheckpoint: not null } checkpoint
         )
         {
-            pendingForwardCheckpoint = null;
-            RestoreRunnerTreeTo(checkpoint.EntryCheckpoint, true);
+            pendingForwardCheckpointIndex = null;
+            RestoreRunnerTreeTo(checkpoint.EntryCheckpoint!, true);
 
             capturedAwaitPoint = await RunUntilNextAwaitPointAsync(
                     direction,
@@ -654,8 +686,8 @@ public sealed class Playback
             if (capturedAwaitPoint.Stopped)
             {
                 if (
-                    capturedAwaitPoint.Boundary is
-                    { Record: SeekLoopRecord, Kind: TimelineBoundaryKind.Start } seekStart
+                    capturedAwaitPoint.Boundary is { } seekStart
+                    && IsSeekLoopStartBoundary(seekStart)
                 )
                     await EvaluateStepBoundaryAsync(seekStart, direction).ConfigureAwait(false);
 
@@ -826,7 +858,7 @@ public sealed class Playback
             RestoreResumeStoreSnapshot(checkpoint.EntryCheckpoint);
             await RunUntilIdleAsync(currentCancellationToken).ConfigureAwait(false);
             IsCompleted = false;
-            currentRecord = checkpoint;
+            SetCurrentRecord(checkpoint);
             return true;
         }
         finally
@@ -880,7 +912,9 @@ public sealed class Playback
             if (existing != null)
             {
                 existing.OwnerRunner = runner;
-                existing.Parent = parentRecord;
+                existing.ParentIndex = parentRecord?.FlatIndex;
+                existing.ParentId = parentRecord?.Id;
+                existing.Depth = parentRecord == null ? 0 : parentRecord.Depth + 1;
                 record = existing;
             }
             else
@@ -905,7 +939,7 @@ public sealed class Playback
             Time,
             PlaybackPromiseKind.Checkpoint,
             null,
-            parentRecord,
+            parentRecord?.FlatIndex,
             playbackRecordIndex,
             Timestamp,
             DeltaTime
@@ -1018,13 +1052,21 @@ public sealed class Playback
         return call;
     }
 
+    internal void BindCallParentAwaitCheckpoint(int callRecordIndex, int checkpointId)
+    {
+        if (GetRecord(callRecordIndex) is not CallTimelineRecord call)
+            throw new InvalidOperationException("Call record index does not refer to a call.");
+
+        call.BindParentAwaitCheckpoint(checkpointId);
+    }
+
     internal void OnCheckpointCaptured(
         IPlaybackRunner runner,
         int checkpointId,
         PlaybackPromiseKind awaitKind,
         PlaybackPromiseBase? awaitedPromise,
-        TimelineRecord? ownerRecord,
-        TimelineRecord? resumeScope
+        int? ownerRecordIndex,
+        int? resumeScope
     )
     {
         if (suppressAwaitPointTimestampSamplingDepth == 0)
@@ -1043,15 +1085,16 @@ public sealed class Playback
             DeltaTime
         );
 
-        if (ownerRecord != null)
+        if (ownerRecordIndex is { } index)
         {
+            var ownerRecord = GetRecord(index);
             SetEntryCheckpoint(ownerRecord, checkpoint);
 
             if (
                 SuppressCheckpointAutoContinuation
                 && ownerRecord is CheckpointTimelineRecord checkpointRecord
             )
-                pendingForwardCheckpoint = checkpointRecord;
+                pendingForwardCheckpointIndex = checkpointRecord.FlatIndex;
         }
         else
         {
@@ -1061,15 +1104,17 @@ public sealed class Playback
 
     internal void OnRunnerCompleted(IPlaybackRunner runner)
     {
-        if (runner.CurrentCallRecord != null)
+        if (runner.CurrentCallRecordIndex is { } callRecordIndex)
         {
-            var call = runner.CurrentCallRecord;
+            var call =
+                GetRecord(callRecordIndex) as CallTimelineRecord
+                ?? throw new InvalidOperationException("Runner call record is not a call.");
             call.Complete(Time);
 
             if (!suppressImplicitCallContinuationBoundary && call.ParentAwaitCheckpointId != 0)
                 CreateOrUpdateImplicitCallContinuationCheckpoint(call);
 
-            currentRecord = call;
+            SetCurrentRecord(call);
         }
 
         if (ReferenceEquals(runner, rootRunner))
@@ -1278,7 +1323,7 @@ public sealed class Playback
             : TimelineBoundaryScope.StepBackward;
     }
 
-    private static bool IsStepBoundaryIncluded(
+    private bool IsStepBoundaryIncluded(
         TimelineBoundary? boundary,
         PlaybackStepGranularity granularity
     )
@@ -1288,7 +1333,7 @@ public sealed class Playback
             : IsStepBoundaryIncluded(boundary.Value, granularity);
     }
 
-    private static bool IsStepBoundaryIncluded(
+    private bool IsStepBoundaryIncluded(
         TimelineBoundary boundary,
         PlaybackStepGranularity granularity
     )
@@ -1296,7 +1341,7 @@ public sealed class Playback
         if (granularity == PlaybackStepGranularity.AwaitPoint)
             return true;
 
-        return boundary.Record switch
+        return GetRecord(boundary.RecordIndex) switch
         {
             CheckpointTimelineRecord checkpoint => checkpoint.CheckpointKind
                 == CheckpointRecordKind.User,
@@ -1361,7 +1406,7 @@ public sealed class Playback
 
     private TimelineBoundary? GetCurrentStepBoundary()
     {
-        var record = currentRecord;
+        var record = GetCurrentRecord();
         if (record == null)
             return null;
 
@@ -1390,7 +1435,7 @@ public sealed class Playback
 
     private TimelineBoundary? GetCurrentBoundaryPosition()
     {
-        var record = currentRecord;
+        var record = GetCurrentRecord();
         if (record == null)
             return null;
 
@@ -1492,24 +1537,31 @@ public sealed class Playback
         return false;
     }
 
+    private bool IsSeekLoopStartBoundary(TimelineBoundary boundary)
+    {
+        return boundary.Kind == TimelineBoundaryKind.Start
+            && GetRecord(boundary.RecordIndex) is SeekLoopRecord;
+    }
+
     private async ValueTask EvaluateStepBoundaryAsync(
         TimelineBoundary boundary,
         PlaybackDirection direction
     )
     {
+        var record = GetRecord(boundary.RecordIndex);
         MoveTimeTo(boundary.Time);
 
-        if (boundary.Kind == TimelineBoundaryKind.Start && boundary.Record is DelayRecord)
+        if (boundary.Kind == TimelineBoundaryKind.Start && record is DelayRecord)
         {
             if (direction == PlaybackDirection.Backward)
-                RestoreToRecord(boundary.Record);
+                RestoreToRecord(record);
 
             MoveTimeTo(boundary.Time);
-            currentRecord = boundary.Record;
+            SetCurrentRecord(record);
             return;
         }
 
-        await EvaluateRecordAsync(boundary.Record, boundary.Time, direction).ConfigureAwait(false);
+        await EvaluateRecordAsync(record, boundary.Time, direction).ConfigureAwait(false);
         MoveTimeTo(boundary.Time);
     }
 
@@ -1738,7 +1790,7 @@ public sealed class Playback
         recordRuntime.CompleteDelay(delay.FlatIndex);
         await RunReadyAsync(currentCancellationToken).ConfigureAwait(false);
 
-        currentRecord = delay;
+        SetCurrentRecord(delay);
     }
 
     private async ValueTask EmitEffectAtAsync(EffectRecord effect, PlaybackDirection direction)
@@ -1747,7 +1799,7 @@ public sealed class Playback
         {
             MoveTimeTo(effect.StartTime);
             stateStore.RestoreEntry(effect.FlatIndex);
-            currentRecord = effect;
+            SetCurrentRecord(effect);
             Mode = PlaybackMode.Playback;
             playbackRecordIndex = Math.Min(effect.FlatIndex + 1, records.Count);
             return;
@@ -1755,7 +1807,7 @@ public sealed class Playback
 
         RestoreToRecord(effect);
         await RunReadyAsync(currentCancellationToken).ConfigureAwait(false);
-        currentRecord = effect;
+        SetCurrentRecord(effect);
     }
 
     private async ValueTask EmitSeekLoopAtAsync(
@@ -1779,7 +1831,7 @@ public sealed class Playback
         recordRuntime.EmitSeekLoopTrueAt(loop.FlatIndex, loop.StartTime, loop.Duration, targetTime);
         await RunReadyAsync(currentCancellationToken).ConfigureAwait(false);
 
-        currentRecord = loop;
+        SetCurrentRecord(loop);
     }
 
     private async ValueTask EmitCheckpointAsync(
@@ -1808,7 +1860,7 @@ public sealed class Playback
         {
             RestoreRunnerTreeTo(checkpoint.EntryCheckpoint, reconnectParents);
             RestoreResumeStoreSnapshot(checkpoint.EntryCheckpoint);
-            currentRecord = checkpoint;
+            SetCurrentRecord(checkpoint);
 
             await RunUntilIdleAsync(currentCancellationToken).ConfigureAwait(false);
         }
@@ -1820,7 +1872,7 @@ public sealed class Playback
             suppressImplicitCallContinuationBoundary = previousSuppress;
         }
 
-        currentRecord = checkpoint;
+        SetCurrentRecord(checkpoint);
     }
 
     private bool HasActiveSeekLoop(SeekLoopRecord loop)
@@ -1916,19 +1968,24 @@ public sealed class Playback
         record.FlatIndex = records.Count;
         record.OwnerRunner = ownerRunnerOverride ?? PlaybackRuntime.CurrentRunner;
 
+        var currentRunner = PlaybackRuntime.CurrentRunner;
+        var scopeIndex = PlaybackRuntime.CurrentRecordScopeIndex;
         var parent =
             parentOverride
-            ?? PlaybackRuntime.CurrentRecordScope
-            ?? PlaybackRuntime.CurrentRunner?.CurrentCallRecord;
+            ?? (scopeIndex is { } index && currentRunner != null ? currentRunner[index] : null)
+            ?? (
+                currentRunner?.CurrentCallRecordIndex is { } callIndex
+                    ? currentRunner[callIndex]
+                    : null
+            );
 
-        record.Parent = parent;
-
-        if (parent != null)
-            parent.Children.Add(record);
+        record.ParentIndex = parent?.FlatIndex;
+        record.ParentId = parent?.Id;
+        record.Depth = parent == null ? 0 : parent.Depth + 1;
 
         records.Add(record);
 
-        currentRecord = record;
+        SetCurrentRecord(record);
         playbackRecordIndex = records.Count;
     }
 
@@ -1951,7 +2008,7 @@ public sealed class Playback
             return null;
 
         playbackRecordIndex++;
-        currentRecord = checkpoint;
+        SetCurrentRecord(checkpoint);
         return checkpoint;
     }
 
@@ -1967,7 +2024,7 @@ public sealed class Playback
             return null;
 
         playbackRecordIndex++;
-        currentRecord = delay;
+        SetCurrentRecord(delay);
         return delay;
     }
 
@@ -1983,7 +2040,7 @@ public sealed class Playback
             return null;
 
         playbackRecordIndex++;
-        currentRecord = effect;
+        SetCurrentRecord(effect);
         return effect;
     }
 
@@ -1999,7 +2056,7 @@ public sealed class Playback
             return null;
 
         playbackRecordIndex++;
-        currentRecord = loop;
+        SetCurrentRecord(loop);
         return loop;
     }
 
@@ -2021,7 +2078,7 @@ public sealed class Playback
         call.RebindRunners(parentRunner, childRunner);
 
         playbackRecordIndex++;
-        currentRecord = call;
+        SetCurrentRecord(call);
         return call;
     }
 
@@ -2043,7 +2100,7 @@ public sealed class Playback
 
         nextRecordId = records.Count == 0 ? 0 : records.Max(static record => record.Id);
 
-        currentRecord = records.Count == 0 ? null : records[^1];
+        SetCurrentRecord(records.Count == 0 ? null : records[^1]);
 
         playbackRecordIndex = records.Count;
 
@@ -2053,24 +2110,32 @@ public sealed class Playback
 
     private void RebuildRecordIndexes()
     {
-        var liveIds = new HashSet<int>(records.Select(static record => record.Id));
-
-        foreach (var record in records)
-            record.Children.Clear();
+        var liveIndexesById = new Dictionary<int, int>();
 
         for (var i = 0; i < records.Count; i++)
         {
             var record = records[i];
             record.FlatIndex = i;
+            liveIndexesById[record.Id] = i;
+        }
 
-            if (record.Parent != null && liveIds.Contains(record.Parent.Id))
+        for (var i = 0; i < records.Count; i++)
+        {
+            var record = records[i];
+
+            if (
+                record.ParentId is { } parentId
+                && liveIndexesById.TryGetValue(parentId, out var parentIndex)
+            )
             {
-                record.Parent.Children.Add(record);
+                record.ParentIndex = parentIndex;
+                record.Depth = records[parentIndex].Depth + 1;
+                continue;
             }
-            else
-            {
-                record.Parent = null;
-            }
+
+            record.ParentIndex = null;
+            record.ParentId = null;
+            record.Depth = 0;
         }
     }
 
@@ -2080,13 +2145,13 @@ public sealed class Playback
         activeSeekLoopIndexes.Clear();
         recordRuntime.Reset();
         suppressLoopExitForIndex = null;
-        pendingForwardCheckpoint = null;
+        pendingForwardCheckpointIndex = null;
 
         MoveTimeTo(targetTime);
         edgeCursor = PlaybackEdgeCursor.None;
 
         var nearest = FindNearestRecordAtOrBefore(targetTime);
-        currentRecord = nearest;
+        SetCurrentRecord(nearest);
         if (nearest == null)
             RestoreStoreSnapshot(null);
         else
@@ -2123,7 +2188,7 @@ public sealed class Playback
 
         RestoreRunnerTreeTo(record.EntryCheckpoint, true);
 
-        currentRecord = record;
+        SetCurrentRecord(record);
     }
 
     private void RestoreRunnerTreeTo(TimelineCheckpoint target, bool reconnectParentContinuations)
@@ -2131,7 +2196,7 @@ public sealed class Playback
         scheduler.ResetReady();
         activeSeekLoopIndexes.Clear();
         suppressLoopExitForIndex = null;
-        pendingForwardCheckpoint = null;
+        pendingForwardCheckpointIndex = null;
 
         RebuildRecordIndexes();
         recordRuntime.Reset();
@@ -2318,13 +2383,13 @@ public sealed class Playback
         scheduler.ResetReady();
         activeSeekLoopIndexes.Clear();
         suppressLoopExitForIndex = null;
-        pendingForwardCheckpoint = null;
+        pendingForwardCheckpointIndex = null;
 
         RebuildRecordIndexes();
         recordRuntime.Reset();
 
         playbackRecordIndex = GetInitialPlaybackIndex();
-        currentRecord = null;
+        SetCurrentRecord((int?)null);
         IsCompleted = false;
         edgeCursor = postReady ? PlaybackEdgeCursor.None : PlaybackEdgeCursor.BeforeFirst;
         Mode = records.Count == 0 ? PlaybackMode.Recording : PlaybackMode.Playback;
@@ -2411,8 +2476,12 @@ public sealed class Playback
                 );
 
                 var delay =
-                    promise.OwnerRecord as DelayRecord
-                    ?? throw new InvalidOperationException("Delay checkpoint has no delay record.");
+                    promise.OwnerRecordIndex is { } delayIndex
+                    && GetRecord(delayIndex) is DelayRecord delayRecord
+                        ? delayRecord
+                        : throw new InvalidOperationException(
+                            "Delay checkpoint has no delay record."
+                        );
 
                 recordRuntime.ArmDelay(delay.FlatIndex, promise);
 
@@ -2438,10 +2507,12 @@ public sealed class Playback
                 );
 
                 var effect =
-                    promise.OwnerRecord as EffectRecord
-                    ?? throw new InvalidOperationException(
-                        "Effect checkpoint has no effect record."
-                    );
+                    promise.OwnerRecordIndex is { } effectIndex
+                    && GetRecord(effectIndex) is EffectRecord effectRecord
+                        ? effectRecord
+                        : throw new InvalidOperationException(
+                            "Effect checkpoint has no effect record."
+                        );
 
                 StartEffect(effect, promise);
                 break;
@@ -2462,7 +2533,11 @@ public sealed class Playback
                     checkpoint.ResumeScope
                 );
 
-                switch (promise.OwnerRecord)
+                var ownerRecord = promise.OwnerRecordIndex is { } ownerIndex
+                    ? GetRecord(ownerIndex)
+                    : null;
+
+                switch (ownerRecord)
                 {
                     case SeekLoopRecord loop:
                         recordRuntime.ArmSeekLoopMoveNext(loop.FlatIndex, promise);
@@ -2558,7 +2633,7 @@ public sealed class Playback
             Time,
             Timestamp,
             DeltaTime,
-            boundary?.Record.ToInfo(),
+            boundary is { } value ? GetRecord(value.RecordIndex).ToInfo() : null,
             boundary == null ? null : ToPublicBoundaryKind(boundary.Value.Kind)
         );
     }
@@ -2608,7 +2683,7 @@ public sealed class Playback
         IPlaybackRunner Runner,
         int CheckpointId,
         long ExpectedEpoch,
-        TimelineRecord? ResumeScope
+        int? ResumeScope
     );
 
     private sealed record PostedDelayCompletion(Playback Playback, int RecordIndex);

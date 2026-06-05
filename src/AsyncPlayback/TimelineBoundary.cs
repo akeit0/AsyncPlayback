@@ -17,7 +17,7 @@ internal enum TimelineBoundaryScope
 internal readonly record struct TimelineBoundary(
     TimeSpan Time,
     int Order,
-    TimelineRecord Record,
+    int RecordIndex,
     TimelineBoundaryKind Kind
 ) : IComparable<TimelineBoundary>
 {
@@ -25,7 +25,7 @@ internal readonly record struct TimelineBoundary(
     {
         var time = kind == TimelineBoundaryKind.End ? record.EndTime : record.StartTime;
         var order = record.FlatIndex * 2 + (kind == TimelineBoundaryKind.End ? 1 : 0);
-        return new(time, order, record, kind);
+        return new(time, order, record.FlatIndex, kind);
     }
 
     public int CompareTo(TimelineBoundary other)

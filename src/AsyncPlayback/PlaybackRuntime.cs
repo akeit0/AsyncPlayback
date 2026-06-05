@@ -9,7 +9,7 @@ internal static class PlaybackRuntime
     private static Stack<IPlaybackRunner>? runners;
 
     [ThreadStatic]
-    private static Stack<TimelineRecord>? recordScopes;
+    private static Stack<int>? recordScopes;
 
     public static Playback? CurrentPlayback
     {
@@ -29,7 +29,7 @@ internal static class PlaybackRuntime
         }
     }
 
-    public static TimelineRecord? CurrentRecordScope
+    public static int? CurrentRecordScopeIndex
     {
         get
         {
@@ -68,16 +68,16 @@ internal static class PlaybackRuntime
         stack.Pop();
     }
 
-    public static void PushRecordScope(TimelineRecord record)
+    public static void PushRecordScope(int recordIndex)
     {
-        (recordScopes ??= new()).Push(record);
+        (recordScopes ??= new()).Push(recordIndex);
     }
 
-    public static void PopRecordScope(TimelineRecord record)
+    public static void PopRecordScope(int recordIndex)
     {
         var stack = recordScopes;
 
-        if (stack == null || stack.Count == 0 || !ReferenceEquals(stack.Peek(), record))
+        if (stack == null || stack.Count == 0 || stack.Peek() != recordIndex)
             throw new InvalidOperationException("Record scope stack corruption.");
 
         stack.Pop();

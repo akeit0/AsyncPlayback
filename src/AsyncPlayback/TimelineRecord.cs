@@ -77,8 +77,9 @@ internal abstract class TimelineRecord
     public TimeSpan EndTime => StartTime + Duration;
     public string DebugLabel { get; }
 
-    public TimelineRecord? Parent { get; internal set; }
-    public List<TimelineRecord> Children { get; } = [];
+    public int? ParentIndex { get; internal set; }
+    public int? ParentId { get; internal set; }
+    public int Depth { get; internal set; }
     public int FlatIndex { get; internal set; }
     public IPlaybackRunner? OwnerRunner { get; internal set; }
     public TimelineCheckpoint? EntryCheckpoint { get; internal set; }
@@ -98,8 +99,8 @@ internal abstract class TimelineRecord
             StartTime,
             Duration,
             DebugLabel,
-            Parent?.Id,
-            GetDepth(),
+            ParentId,
+            Depth,
             GetVisibility(),
             EntryCheckpoint?.Timestamp,
             EntryCheckpoint?.DeltaTime
@@ -116,16 +117,6 @@ internal abstract class TimelineRecord
             _ => TimelineRecordVisibility.Workflow,
         };
     }
-
-    private int GetDepth()
-    {
-        var depth = 0;
-        for (var parent = Parent; parent != null; parent = parent.Parent)
-            depth++;
-
-        return depth;
-    }
-
 }
 
 internal sealed class CheckpointTimelineRecord : TimelineRecord

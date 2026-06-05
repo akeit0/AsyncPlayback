@@ -3,36 +3,37 @@ namespace AsyncPlayback;
 public readonly struct SeekLoopEnumerable
 {
     private readonly Playback playback;
-    private readonly SeekLoopRecord record;
+    private readonly int recordIndex;
 
-    internal SeekLoopEnumerable(Playback playback, SeekLoopRecord record)
+    internal SeekLoopEnumerable(Playback playback, int recordIndex)
     {
         this.playback = playback;
-        this.record = record;
+        this.recordIndex = recordIndex;
     }
 
     public SeekLoopEnumerator GetAsyncEnumerator()
     {
-        return new(playback, record);
+        return new(playback, recordIndex);
     }
 }
 
 public readonly struct SeekLoopEnumerator
 {
-    private readonly SeekLoopRecord record;
+    private readonly int recordIndex;
     private readonly Playback playback;
 
-    internal SeekLoopEnumerator(Playback playback, SeekLoopRecord record)
+    internal SeekLoopEnumerator(Playback playback, int recordIndex)
     {
         this.playback = playback;
-        this.record = record;
+        this.recordIndex = recordIndex;
     }
 
     public SeekLoopProgress Current
     {
         get
         {
-            var elpased = playback.GetSeekLoopElapsed(record);
+            var record = playback.GetSeekLoopRecord(recordIndex);
+            var elpased = playback.GetSeekLoopElapsed(recordIndex);
             var progress =
                 record.Duration > TimeSpan.Zero
                     ? elpased.TotalSeconds / record.Duration.TotalSeconds
@@ -43,7 +44,7 @@ public readonly struct SeekLoopEnumerator
 
     public PlaybackTask<bool> MoveNextAsync()
     {
-        return playback.ArmSeekLoopMoveNext(record);
+        return playback.ArmSeekLoopMoveNext(recordIndex);
     }
 }
 

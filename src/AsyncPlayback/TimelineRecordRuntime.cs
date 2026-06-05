@@ -1,9 +1,11 @@
+using System.Runtime.InteropServices;
+
 namespace AsyncPlayback;
 
 internal sealed class TimelineRecordRuntime
 {
     private readonly List<PlaybackPromise?> pendingDelays = [];
-    private readonly List<SeekLoopRuntimeState?> seekLoops = [];
+    private readonly List<SeekLoopRuntimeState> seekLoops = [];
 
     public bool HasPendingDelay(int recordIndex)
     {
@@ -32,24 +34,22 @@ internal sealed class TimelineRecordRuntime
     public bool HasPendingSeekLoopMoveNext(int recordIndex)
     {
         return recordIndex < seekLoops.Count
-            && seekLoops[recordIndex]?.PendingMoveNext is { IsCompleted: false };
+            && seekLoops[recordIndex].PendingMoveNext is { IsCompleted: false };
     }
 
     public TimeSpan GetSeekLoopElapsed(int recordIndex)
     {
-        return recordIndex < seekLoops.Count && seekLoops[recordIndex] is { } state
-            ? state.CurrentElapsed
-            : default;
+        return recordIndex < seekLoops.Count ? seekLoops[recordIndex].CurrentElapsed : default;
     }
 
     public bool HasDeliveredFinalSeekLoopTrue(int recordIndex)
     {
-        return recordIndex < seekLoops.Count && seekLoops[recordIndex]?.FinalTrueDelivered == true;
+        return recordIndex < seekLoops.Count && seekLoops[recordIndex].FinalTrueDelivered;
     }
 
     public void ArmSeekLoopMoveNext(int recordIndex, PlaybackPromise<bool> promise)
     {
-        var state = GetOrCreateSeekLoopState(recordIndex);
+        ref var state = ref GetOrCreateSeekLoopState(recordIndex);
         state.PendingMoveNext = promise ?? throw new ArgumentNullException(nameof(promise));
     }
 
@@ -60,7 +60,7 @@ internal sealed class TimelineRecordRuntime
         TimeSpan playbackTime
     )
     {
-        var state = GetOrCreateSeekLoopState(recordIndex);
+        ref var state = ref GetOrCreateSeekLoopState(recordIndex);
         var promise = state.PendingMoveNext;
 
         if (promise is not { IsCompleted: false })
@@ -85,15 +85,17 @@ internal sealed class TimelineRecordRuntime
 
     public bool CompleteSeekLoopFalse(int recordIndex)
     {
-        if (recordIndex >= seekLoops.Count || seekLoops[recordIndex] is not { } state)
+        if (recordIndex >= seekLoops.Count)
             return false;
 
+        var state = seekLoops[recordIndex];
         var promise = state.PendingMoveNext;
 
         if (promise is not { IsCompleted: false })
             return false;
 
         state.PendingMoveNext = null;
+        seekLoops[recordIndex] = state;
         return promise.TrySetResult(false);
     }
 
@@ -115,16 +117,10 @@ internal sealed class TimelineRecordRuntime
             seekLoops.RemoveRange(recordCount, seekLoops.Count - recordCount);
     }
 
-    private SeekLoopRuntimeState GetOrCreateSeekLoopState(int recordIndex)
+    private ref SeekLoopRuntimeState GetOrCreateSeekLoopState(int recordIndex)
     {
         EnsureRecordIndex(recordIndex);
-
-        if (seekLoops[recordIndex] == null)
-        {
-            seekLoops[recordIndex] = new();
-        }
-
-        return seekLoops[recordIndex]!;
+        return ref CollectionsMarshal.AsSpan(seekLoops)[recordIndex];
     }
 
     private void EnsureRecordIndex(int recordIndex)
@@ -136,10 +132,10 @@ internal sealed class TimelineRecordRuntime
             pendingDelays.Add(null);
 
         while (seekLoops.Count <= recordIndex)
-            seekLoops.Add(null);
+            seekLoops.Add(default);
     }
 
-    private sealed class SeekLoopRuntimeState
+    private struct SeekLoopRuntimeState
     {
         public PlaybackPromise<bool>? PendingMoveNext { get; set; }
         public TimeSpan CurrentElapsed { get; set; }

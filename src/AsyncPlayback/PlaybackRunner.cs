@@ -8,17 +8,19 @@ internal interface IPlaybackRunner
     long Epoch { get; }
     PlaybackPromiseBase OwnPromise { get; }
     IPlaybackRunner? ParentRunner { get; }
-    CallTimelineRecord? CurrentCallRecord { get; }
+    int? CurrentCallRecordIndex { get; }
     int ParentAwaitCheckpointId { get; }
     int CurrentStateCheckpointId { get; }
 
-    TimelineRecord? GetResumeScope(int checkpointId);
+    TimelineRecord this[int recordIndex] { get; }
 
-    void BindCurrentCallRecord(CallTimelineRecord call);
+    int? GetResumeScope(int checkpointId);
+
+    void BindCurrentCallRecord(int callRecordIndex);
     void SetParentAwaitCheckpointId(int checkpointId);
 
     void MoveNext();
-    void ResumeFromAwait(int checkpointId, long expectedEpoch, TimelineRecord? resumeScope);
+    void ResumeFromAwait(int checkpointId, long expectedEpoch, int? resumeScopeIndex);
 
     void RestoreCheckpoint(int checkpointId);
     void RestoreInitialCheckpoint();
@@ -38,7 +40,7 @@ internal sealed class PlaybackRunner<TStateMachine> : IPlaybackRunner
     where TStateMachine : IAsyncStateMachine
 {
     private TStateMachine[] checkpoints = [];
-    private TimelineRecord?[] checkpointScopes = [];
+    private int?[] checkpointScopes = [];
     private readonly TStateMachine initialSnapshot;
 
     private readonly Playback playback;
@@ -46,7 +48,7 @@ internal sealed class PlaybackRunner<TStateMachine> : IPlaybackRunner
     private TStateMachine current;
     private bool isCompleted;
     private int nextCheckpointId;
-    private TimelineRecord? scopeForNextMoveNext;
+    private int? scopeForNextMoveNext;
     private int suspendedCheckpointId;
 
     public PlaybackRunner(
@@ -69,27 +71,30 @@ internal sealed class PlaybackRunner<TStateMachine> : IPlaybackRunner
     public PlaybackPromiseBase OwnPromise { get; }
 
     public IPlaybackRunner? ParentRunner { get; }
-    public CallTimelineRecord? CurrentCallRecord { get; private set; }
+    public int? CurrentCallRecordIndex { get; private set; }
 
     public int ParentAwaitCheckpointId { get; private set; }
     public int CurrentStateCheckpointId { get; private set; }
 
-    public TimelineRecord? GetResumeScope(int checkpointId)
+    public TimelineRecord this[int recordIndex] => playback.GetRecord(recordIndex);
+
+    public int? GetResumeScope(int checkpointId)
     {
         if (checkpointId <= 0 || checkpointId > checkpointScopes.Length)
             return null;
         return checkpointScopes[checkpointId - 1];
     }
 
-    public void BindCurrentCallRecord(CallTimelineRecord call)
+    public void BindCurrentCallRecord(int callRecordIndex)
     {
-        CurrentCallRecord = call ?? throw new ArgumentNullException(nameof(call));
+        CurrentCallRecordIndex = callRecordIndex;
     }
 
     public void SetParentAwaitCheckpointId(int checkpointId)
     {
         ParentAwaitCheckpointId = checkpointId;
-        CurrentCallRecord?.BindParentAwaitCheckpoint(checkpointId);
+        if (CurrentCallRecordIndex is { } callRecordIndex)
+            playback.BindCallParentAwaitCheckpoint(callRecordIndex, checkpointId);
     }
 
     public void MoveNext()
@@ -103,9 +108,9 @@ internal sealed class PlaybackRunner<TStateMachine> : IPlaybackRunner
         var pushedScope = false;
         var scope = scopeForNextMoveNext;
 
-        if (scope != null)
+        if (scope is { } scopeIndex)
         {
-            PlaybackRuntime.PushRecordScope(scope);
+            PlaybackRuntime.PushRecordScope(scopeIndex);
             pushedScope = true;
         }
 
@@ -119,14 +124,14 @@ internal sealed class PlaybackRunner<TStateMachine> : IPlaybackRunner
         finally
         {
             if (pushedScope)
-                PlaybackRuntime.PopRecordScope(scope!);
+                PlaybackRuntime.PopRecordScope(scope!.Value);
 
             PlaybackRuntime.PopRunner(this);
             PlaybackRuntime.PopPlayback(playback);
         }
     }
 
-    public void ResumeFromAwait(int checkpointId, long expectedEpoch, TimelineRecord? resumeScope)
+    public void ResumeFromAwait(int checkpointId, long expectedEpoch, int? resumeScopeIndex)
     {
         if (isCompleted)
             return;
@@ -143,7 +148,7 @@ internal sealed class PlaybackRunner<TStateMachine> : IPlaybackRunner
 
         suspendedCheckpointId = 0;
         CurrentStateCheckpointId = checkpointId;
-        scopeForNextMoveNext = resumeScope;
+        scopeForNextMoveNext = resumeScopeIndex;
 
         MoveNext();
     }
@@ -206,8 +211,8 @@ internal sealed class PlaybackRunner<TStateMachine> : IPlaybackRunner
         ref TStateMachine stateMachine,
         PlaybackPromiseKind awaitKind,
         PlaybackPromiseBase? awaitedPromise,
-        TimelineRecord? ownerRecord,
-        TimelineRecord? resumeScope
+        int? ownerRecordIndex,
+        int? resumeScopeIndex
     )
     {
         var storedSnapshot = SnapshotStateMachine(stateMachine);
@@ -222,7 +227,7 @@ internal sealed class PlaybackRunner<TStateMachine> : IPlaybackRunner
             Array.Resize(ref checkpointScopes, Math.Max(2, checkpointScopes.Length * 2));
         }
         checkpoints[checkpointId - 1] = storedSnapshot;
-        checkpointScopes[checkpointId - 1] = resumeScope;
+        checkpointScopes[checkpointId - 1] = resumeScopeIndex;
         suspendedCheckpointId = checkpointId;
 
         playback.OnCheckpointCaptured(
@@ -230,8 +235,8 @@ internal sealed class PlaybackRunner<TStateMachine> : IPlaybackRunner
             checkpointId,
             awaitKind,
             awaitedPromise,
-            ownerRecord,
-            resumeScope
+            ownerRecordIndex,
+            resumeScopeIndex
         );
 
         return checkpointId;

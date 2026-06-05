@@ -208,7 +208,7 @@ internal sealed class PlaybackTaskMethodBuilderCore
         {
             var call = playback.GetOrCreateCallRecord(parentRunner, runner, stateMachineName);
 
-            runner.BindCurrentCallRecord(call);
+            runner.BindCurrentCallRecord(call.FlatIndex);
 
             playback.RegisterRunnerEntry(runner, call, $"entry {stateMachineName}");
         }
@@ -258,15 +258,16 @@ internal sealed class PlaybackTaskMethodBuilderCore
                 "State machine runner is missing or has unexpected type."
             );
 
-        var ownerRecord = awaitedPromise.OwnerRecord;
+        var ownerRecordIndex = awaitedPromise.OwnerRecordIndex;
 
-        var resumeScope = PlaybackRuntime.CurrentRecordScope ?? typedRunner.CurrentCallRecord;
+        var resumeScope =
+            PlaybackRuntime.CurrentRecordScopeIndex ?? typedRunner.CurrentCallRecordIndex;
 
         var checkpointId = typedRunner.CaptureCheckpoint(
             ref stateMachine,
             awaitedPromise.Kind,
             awaitedPromise,
-            ownerRecord,
+            ownerRecordIndex,
             resumeScope
         );
 
@@ -299,13 +300,13 @@ internal sealed class PlaybackTaskMethodBuilderCore
 
         var record = playback.GetOrCreateCheckpointRecord(debugLabel);
 
-        var resumeScope = PlaybackRuntime.CurrentRecordScope;
+        var resumeScope = PlaybackRuntime.CurrentRecordScopeIndex;
 
         var checkpointId = typedRunner.CaptureCheckpoint(
             ref stateMachine,
             PlaybackPromiseKind.Checkpoint,
             null,
-            record,
+            record.FlatIndex,
             resumeScope
         );
 
@@ -322,6 +323,6 @@ internal sealed class PlaybackTaskMethodBuilderCore
         IPlaybackRunner Runner,
         int CheckpointId,
         long ExpectedEpoch,
-        TimelineRecord? ResumeScope
+        int? ResumeScope
     );
 }
