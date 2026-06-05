@@ -276,7 +276,7 @@ public sealed class Playback
         var playback = this;
 
         var record = playback.UseDelayRecord(duration, debugLabel);
-        if (IsReplayAwait(record))
+        if (currentDirection == PlaybackDirection.Backward)
             return PlaybackTask.SuspendReplayAt(PlaybackPromiseKind.Delay, record.FlatIndex);
 
         var promise = new PlaybackPromise(playback, PlaybackPromiseKind.Delay)
@@ -393,7 +393,7 @@ public sealed class Playback
         if (currentDirection == PlaybackDirection.Backward)
             return PlaybackTask<T>.SuspendReplayAt(PlaybackPromiseKind.Effect, record.FlatIndex);
 
-        if (IsReplayAwait(record))
+        if (currentDirection == PlaybackDirection.Backward)
         {
             if (!record.TryGetEffectResult(out var result))
                 throw new InvalidOperationException(
@@ -625,32 +625,6 @@ public sealed class Playback
         );
     }
 
-    public ValueTask MoveToAsync(TimeSpan targetTime, CancellationToken cancellationToken)
-    {
-        return MoveToAsync(
-            targetTime,
-            PlaybackMoveMode.Traverse,
-            direction: null,
-            evaluateTarget: true,
-            cancellationToken
-        );
-    }
-
-    public ValueTask MoveToAsync(
-        TimeSpan targetTime,
-        TransportOptions options,
-        CancellationToken cancellationToken = default
-    )
-    {
-        return MoveToAsync(
-            targetTime,
-            ToMoveMode(options.Evaluation),
-            direction: null,
-            evaluateTarget: options.EvaluateTarget,
-            cancellationToken
-        );
-    }
-
     public ValueTask MoveToAsync(
         TimeSpan targetTime,
         PlaybackDirection direction,
@@ -662,42 +636,6 @@ public sealed class Playback
             PlaybackMoveMode.Traverse,
             direction,
             evaluateTarget: true,
-            cancellationToken
-        );
-    }
-
-    public ValueTask MoveToAsync(
-        TimeSpan targetTime,
-        PlaybackDirection direction,
-        TransportOptions options,
-        CancellationToken cancellationToken = default
-    )
-    {
-        return MoveToAsync(
-            targetTime,
-            ToMoveMode(options.Evaluation),
-            direction,
-            evaluateTarget: options.EvaluateTarget,
-            cancellationToken
-        );
-    }
-
-    public ValueTask SeekToAsync(TimeSpan targetTime, CancellationToken cancellationToken = default)
-    {
-        return SeekToAsync(targetTime, TransportOptions.TargetOnly, cancellationToken);
-    }
-
-    public ValueTask SeekToAsync(
-        TimeSpan targetTime,
-        TransportOptions options,
-        CancellationToken cancellationToken = default
-    )
-    {
-        return MoveToAsync(
-            targetTime,
-            ToMoveMode(options.Evaluation),
-            direction: null,
-            evaluateTarget: options.EvaluateTarget,
             cancellationToken
         );
     }
@@ -1313,12 +1251,6 @@ public sealed class Playback
         OnRunnerCompleted(runner);
     }
 
-    internal void DebugLog(string message)
-    {
-        if (DebugLogging)
-            Console.WriteLine("[rewind] " + message);
-    }
-
     private void PushSuppressCheckpointAutoContinuation()
     {
         suppressCheckpointAutoContinuationDepth++;
@@ -1446,19 +1378,14 @@ public sealed class Playback
         TimelineBoundary? best = null;
 
         foreach (var boundary in EnumerateTimelineBoundaries(GetStepBoundaryScope(direction)))
-            Consider(boundary);
-
-        return best;
-
-        void Consider(TimelineBoundary boundary)
         {
             if (!IsStepBoundaryIncluded(boundary, granularity))
-                return;
+                continue;
 
             if (direction == PlaybackDirection.Forward)
             {
                 if (boundary.Time < Time)
-                    return;
+                    continue;
 
                 if (
                     boundary.Time == Time
@@ -1467,16 +1394,16 @@ public sealed class Playback
                     && last.Time == Time
                     && boundary.Order <= last.Order
                 )
-                    return;
+                    continue;
 
                 if (best == null || boundary.CompareTo(best.Value) < 0)
                     best = boundary;
 
-                return;
+                continue;
             }
 
             if (boundary.Time > Time)
-                return;
+                continue;
 
             if (
                 boundary.Time == Time
@@ -1485,11 +1412,13 @@ public sealed class Playback
                 && lastBack.Time == Time
                 && boundary.Order >= lastBack.Order
             )
-                return;
+                continue;
 
             if (best == null || boundary.CompareTo(best.Value) > 0)
                 best = boundary;
         }
+
+        return best;
     }
 
     private static TimelineBoundaryScope GetStepBoundaryScope(PlaybackDirection direction)
@@ -1578,35 +1507,6 @@ public sealed class Playback
         }
     }
 
-    private TimelineBoundary? GetCurrentStepBoundary()
-    {
-        var record = GetCurrentRecord();
-        if (record == null)
-            return null;
-
-        switch (record.Value.Kind)
-        {
-            case TimelineRecordKind.Delay:
-            case TimelineRecordKind.Effect:
-            case TimelineRecordKind.SeekLoop:
-                if (Time == record.Value.StartTime)
-                    return TimelineBoundary.Create(record.Value, TimelineBoundaryKind.Start);
-
-                if (record.Value.Duration > TimeSpan.Zero && Time == record.Value.EndTime)
-                    return TimelineBoundary.Create(record.Value, TimelineBoundaryKind.End);
-
-                break;
-
-            case TimelineRecordKind.Checkpoint:
-                if (IsCheckpointStepBoundary(record.Value))
-                    return TimelineBoundary.Create(record.Value, TimelineBoundaryKind.Point);
-
-                break;
-        }
-
-        return null;
-    }
-
     private TimelineBoundary? GetCurrentBoundaryPosition()
     {
         var record = GetCurrentRecord();
@@ -1631,11 +1531,6 @@ public sealed class Playback
         }
 
         return null;
-    }
-
-    private bool IsCheckpointStepBoundary(TimelineRecord checkpoint)
-    {
-        return IsCheckpointStepBoundary(checkpoint, null);
     }
 
     private bool IsCheckpointStepBoundary(
@@ -1807,19 +1702,14 @@ public sealed class Playback
         TimelineBoundary? best = null;
 
         foreach (var boundary in EnumerateTimelineBoundaries(TimelineBoundaryScope.Traversal))
-            Consider(boundary);
-
-        return best;
-
-        void Consider(TimelineBoundary boundary)
         {
             if (!IsBetween(boundary.Time, from, to, direction))
-                return;
+                continue;
 
             if (best == null)
             {
                 best = boundary;
-                return;
+                continue;
             }
 
             if (direction == PlaybackDirection.Forward)
@@ -1833,6 +1723,8 @@ public sealed class Playback
                     best = boundary;
             }
         }
+
+        return best;
     }
 
     private static bool IsBetween(
@@ -2186,11 +2078,6 @@ public sealed class Playback
             return TimelineBoundaryKind.End;
 
         return null;
-    }
-
-    private bool IsReplayAwait(TimelineRecord record)
-    {
-        return currentDirection == PlaybackDirection.Backward;
     }
 
     private Exception? StartReplayRevertEffect(Func<CancellationToken, ValueTask> revert)
