@@ -50,49 +50,49 @@ static async Task MoveBackwardAsync(Playback playback, string label)
 
 static async PlaybackTask CheckoutWorkflow(Playback playback)
 {
-    if (playback.CurrentDirection == PlaybackDirection.Forward)
-        playback.Store(await CreateOrderAsync(playback));
+    if (PlaybackTask.CurrentDirection == PlaybackDirection.Forward)
+        PlaybackTask.Store(await CreateOrderAsync());
 
-    await playback.Checkpoint("order created");
-    if (TryGetOrderToCancel(playback, out var orderToCancel))
+    await PlaybackTask.Checkpoint("order created");
+    if (TryGetOrderToCancel(out var orderToCancel))
     {
-        await CancelOrderAsync(playback, orderToCancel);
-        playback.ClearStore();
+        await CancelOrderAsync(orderToCancel);
+        PlaybackTask.ClearStore();
         return;
     }
 
-    if (playback.CurrentDirection == PlaybackDirection.Forward)
-        playback.Store(await ReserveInventoryAsync(playback, RequireState(playback)));
+    if (PlaybackTask.CurrentDirection == PlaybackDirection.Forward)
+        PlaybackTask.Store(await ReserveInventoryAsync(RequireState()));
 
-    await playback.Checkpoint("inventory reserved");
-    if (TryGetReservationToRelease(playback, out var reservationToRelease))
+    await PlaybackTask.Checkpoint("inventory reserved");
+    if (TryGetReservationToRelease(out var reservationToRelease))
     {
-        await ReleaseInventoryAsync(playback, reservationToRelease);
-        playback.Store(reservationToRelease with { ReservationId = null });
+        await ReleaseInventoryAsync(reservationToRelease);
+        PlaybackTask.Store(reservationToRelease with { ReservationId = null });
         return;
     }
 
-    if (playback.CurrentDirection == PlaybackDirection.Forward)
-        playback.Store(await ChargePaymentAsync(playback, RequireState(playback)));
+    if (PlaybackTask.CurrentDirection == PlaybackDirection.Forward)
+        PlaybackTask.Store(await ChargePaymentAsync(RequireState()));
 
-    await playback.Checkpoint("payment charged");
-    if (TryGetPaymentToRefund(playback, out var paymentToRefund))
+    await PlaybackTask.Checkpoint("payment charged");
+    if (TryGetPaymentToRefund(out var paymentToRefund))
     {
-        await RefundPaymentAsync(playback, paymentToRefund);
-        playback.Store(paymentToRefund with { PaymentId = null });
+        await RefundPaymentAsync(paymentToRefund);
+        PlaybackTask.Store(paymentToRefund with { PaymentId = null });
         return;
     }
 
-    if (playback.CurrentDirection == PlaybackDirection.Forward)
+    if (PlaybackTask.CurrentDirection == PlaybackDirection.Forward)
         Console.WriteLine("workflow: checkout is active");
 
-    await playback.Checkpoint("checkout active");
+    await PlaybackTask.Checkpoint("checkout active");
 }
 
-static async PlaybackTask<CheckoutState> CreateOrderAsync(Playback playback)
+static async PlaybackTask<CheckoutState> CreateOrderAsync()
 {
-    var state = await playback.Effect(
-        async () =>
+    var state = await PlaybackTask.Effect(
+        async (ct) =>
         {
             await Task.Delay(100);
             Console.WriteLine("effect: create order");
@@ -104,13 +104,10 @@ static async PlaybackTask<CheckoutState> CreateOrderAsync(Playback playback)
     return state;
 }
 
-static async PlaybackTask<CheckoutState> ReserveInventoryAsync(
-    Playback playback,
-    CheckoutState state
-)
+static async PlaybackTask<CheckoutState> ReserveInventoryAsync(CheckoutState state)
 {
-    var reserved = await playback.Effect(
-        async () =>
+    var reserved = await PlaybackTask.Effect(
+        async (ct) =>
         {
             await Task.Delay(100);
             Console.WriteLine($"effect: reserve inventory for {state.OrderId}");
@@ -122,10 +119,10 @@ static async PlaybackTask<CheckoutState> ReserveInventoryAsync(
     return reserved;
 }
 
-static async PlaybackTask<CheckoutState> ChargePaymentAsync(Playback playback, CheckoutState state)
+static async PlaybackTask<CheckoutState> ChargePaymentAsync(CheckoutState state)
 {
-    var charged = await playback.Effect(
-        async () =>
+    var charged = await PlaybackTask.Effect(
+        async (ct) =>
         {
             await Task.Delay(100);
             Console.WriteLine($"effect: charge {state.Amount} yen");
@@ -137,10 +134,10 @@ static async PlaybackTask<CheckoutState> ChargePaymentAsync(Playback playback, C
     return charged;
 }
 
-static async PlaybackTask RefundPaymentAsync(Playback playback, CheckoutState state)
+static async PlaybackTask RefundPaymentAsync(CheckoutState state)
 {
-    await playback.Effect(
-        async () =>
+    await PlaybackTask.Effect(
+        async (ct) =>
         {
             await Task.Delay(100);
             Console.WriteLine($"effect: refund {state.PaymentId}");
@@ -149,10 +146,10 @@ static async PlaybackTask RefundPaymentAsync(Playback playback, CheckoutState st
     );
 }
 
-static async PlaybackTask ReleaseInventoryAsync(Playback playback, CheckoutState state)
+static async PlaybackTask ReleaseInventoryAsync(CheckoutState state)
 {
-    await playback.Effect(
-        async () =>
+    await PlaybackTask.Effect(
+        async (ct) =>
         {
             await Task.Delay(100);
             Console.WriteLine($"effect: release {state.ReservationId}");
@@ -161,10 +158,10 @@ static async PlaybackTask ReleaseInventoryAsync(Playback playback, CheckoutState
     );
 }
 
-static async PlaybackTask CancelOrderAsync(Playback playback, CheckoutState state)
+static async PlaybackTask CancelOrderAsync(CheckoutState state)
 {
-    await playback.Effect(
-        async () =>
+    await PlaybackTask.Effect(
+        async (ct) =>
         {
             await Task.Delay(100);
             Console.WriteLine($"effect: cancel {state.OrderId}");
@@ -173,11 +170,11 @@ static async PlaybackTask CancelOrderAsync(Playback playback, CheckoutState stat
     );
 }
 
-static bool TryGetPaymentToRefund(Playback playback, out CheckoutState state)
+static bool TryGetPaymentToRefund(out CheckoutState state)
 {
     if (
-        playback.CurrentDirection == PlaybackDirection.Backward
-        && playback.TryGet<CheckoutState>(out var restored)
+        PlaybackTask.CurrentDirection == PlaybackDirection.Backward
+        && PlaybackTask.TryGet<CheckoutState>(out var restored)
         && restored is { PaymentId: not null }
     )
     {
@@ -189,8 +186,9 @@ static bool TryGetPaymentToRefund(Playback playback, out CheckoutState state)
     return false;
 }
 
-static bool TryGetReservationToRelease(Playback playback, out CheckoutState state)
+static bool TryGetReservationToRelease(out CheckoutState state)
 {
+    var playback = PlaybackTask.GetCurrentPlayback();
     if (
         playback.CurrentDirection == PlaybackDirection.Backward
         && playback.TryGet<CheckoutState>(out var restored)
@@ -205,8 +203,9 @@ static bool TryGetReservationToRelease(Playback playback, out CheckoutState stat
     return false;
 }
 
-static bool TryGetOrderToCancel(Playback playback, out CheckoutState state)
+static bool TryGetOrderToCancel(out CheckoutState state)
 {
+    var playback = PlaybackTask.GetCurrentPlayback();
     if (
         playback.CurrentDirection == PlaybackDirection.Backward
         && playback.TryGet<CheckoutState>(out var restored)
@@ -220,9 +219,9 @@ static bool TryGetOrderToCancel(Playback playback, out CheckoutState state)
     return false;
 }
 
-static CheckoutState RequireState(Playback playback)
+static CheckoutState RequireState()
 {
-    if (playback.TryGet<CheckoutState>(out var state))
+    if (PlaybackTask.TryGet<CheckoutState>(out var state))
         return state;
 
     throw new InvalidOperationException("Checkout state was not restored.");

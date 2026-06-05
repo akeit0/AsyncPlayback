@@ -25,7 +25,7 @@ static async PlaybackTask Scenario(Playback playback)
     for (var i = 0; i < 3; i++)
     {
         Console.Write(i);
-        await playback.Checkpoint();
+        await PlaybackTask.Checkpoint();
     }
 }
 

@@ -3,6 +3,7 @@ using System.Threading.Channels;
 using Aprillz.MewUI;
 using Aprillz.MewUI.Controls;
 using AsyncPlayback;
+using static AsyncPlayback.PlaybackTask;
 
 Win32Platform.Register();
 GdiBackend.Register();
@@ -87,16 +88,14 @@ async void SyncSlider(Playback playback, double value)
 async PlaybackTask SimulateWork(Playback playback)
 {
     var initialText = label.Text;
-    await playback.Checkpoint();
-    label.Text = playback.CurrentDirection == PlaybackDirection.Forward ? "Running" : initialText;
-    await playback.Delay(TimeSpan.FromSeconds(1));
+    await Checkpoint();
+    label.Text = CurrentDirection == PlaybackDirection.Forward ? "Running" : initialText;
+    await Delay(TimeSpan.FromSeconds(1));
 
-    await foreach (var progress in playback.ForEachOnSeek(TimeSpan.FromSeconds(1)))
+    await foreach (var progress in ForEachOnSeek(TimeSpan.FromSeconds(1)))
     {
         rect.Width = 450 * progress.Progress;
     }
 
-    var t = playback.SelectByDirection(backwardStore: label.Text, forward: "Done!");
-    Console.WriteLine($"Selected text: {t} , Direction: {playback.CurrentDirection}");
-    label.Text = t;
+    label.Text = SelectByDirection(backwardStore: label.Text, forward: "Done!");
 }

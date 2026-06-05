@@ -1199,7 +1199,7 @@ public sealed class TransportStepTests
         for (var i = 0; i < 3; i++)
         {
             events.Add(i.ToString(CultureInfo.InvariantCulture));
-            await playback.Checkpoint();
+            await PlaybackTask.Checkpoint();
         }
     }
 
@@ -1245,25 +1245,25 @@ public sealed class TransportStepTests
     private static async PlaybackTask DelayScenario(Playback playback, List<string> events)
     {
         events.Add("delay:start");
-        await playback.Delay(TimeSpan.FromSeconds(1));
+        await PlaybackTask.Delay(TimeSpan.FromSeconds(1));
         events.Add("delay:end");
     }
 
     private static async PlaybackTask StoreScenario(Playback playback)
     {
         playback.Store("start");
-        await playback.Delay(TimeSpan.FromSeconds(1));
+        await PlaybackTask.Delay(TimeSpan.FromSeconds(1));
         playback.Store("end");
-        await playback.Checkpoint();
+        await PlaybackTask.Checkpoint();
     }
 
     private static async PlaybackTask ClearStoreScenario(Playback playback)
     {
         playback.Store("start");
-        await playback.Checkpoint("stored");
+        await PlaybackTask.Checkpoint("stored");
 
         playback.ClearStore();
-        await playback.Checkpoint("cleared");
+        await PlaybackTask.Checkpoint("cleared");
     }
 
     private static async PlaybackTask CheckpointStoreScenario(Playback playback)
@@ -1271,7 +1271,7 @@ public sealed class TransportStepTests
         for (var i = 0; i < 3; i++)
         {
             playback.Store(i);
-            await playback.Checkpoint();
+            await PlaybackTask.Checkpoint();
         }
     }
 
@@ -1283,7 +1283,7 @@ public sealed class TransportStepTests
         for (var i = 0; i < 2; i++)
         {
             directions.Add(playback.CurrentDirection);
-            await playback.Checkpoint();
+            await PlaybackTask.Checkpoint();
         }
     }
 
@@ -1292,7 +1292,7 @@ public sealed class TransportStepTests
         List<PlaybackDirection> directions
     )
     {
-        await playback.Checkpoint("edge");
+        await PlaybackTask.Checkpoint("edge");
         directions.Add(playback.CurrentDirection);
     }
 
@@ -1302,7 +1302,7 @@ public sealed class TransportStepTests
     )
     {
         directions.Add(playback.CurrentDirection);
-        await playback.Checkpoint("edge");
+        await PlaybackTask.Checkpoint("edge");
     }
 
     private static async PlaybackTask SeekLoopTerminalEdgeScenario(
@@ -1318,9 +1318,9 @@ public sealed class TransportStepTests
     private static async PlaybackTask UiLikeSeekLoopScenario(Playback playback, List<string> events)
     {
         events.Add(playback.CurrentDirection + "start");
-        await playback.Checkpoint("start work");
+        await PlaybackTask.Checkpoint("start work");
         events.Add(playback.CurrentDirection + "middle");
-        await playback.Checkpoint("rectangle added");
+        await PlaybackTask.Checkpoint("rectangle added");
 
         await foreach (var _ in playback.ForEachOnSeek(TimeSpan.FromSeconds(1))) { }
 
@@ -1335,8 +1335,8 @@ public sealed class TransportStepTests
         var text = "Hello, world!";
 
         text = SelectText(playback, events, "start", text, "Working...");
-        await playback.Delay(TimeSpan.FromMilliseconds(300));
-        await playback.Checkpoint("rectangle added");
+        await PlaybackTask.Delay(TimeSpan.FromMilliseconds(300));
+        await PlaybackTask.Checkpoint("rectangle added");
 
         await foreach (var _ in playback.ForEachOnSeek(TimeSpan.FromMilliseconds(700))) { }
 
@@ -1365,9 +1365,9 @@ public sealed class TransportStepTests
         var text = "Hello, world!";
 
         text = playback.SelectByDirection(backwardStore: text, forward: "Working...");
-        await playback.Delay(TimeSpan.FromMilliseconds(300));
+        await PlaybackTask.Delay(TimeSpan.FromMilliseconds(300));
         var rect = AddTestRect(playback, events, panel);
-        await playback.Checkpoint("rectangle added");
+        await PlaybackTask.Checkpoint("rectangle added");
 
         await foreach (var progress in playback.ForEachOnSeek(TimeSpan.FromMilliseconds(2700)))
         {
@@ -1386,9 +1386,9 @@ public sealed class TransportStepTests
     {
         var text = "Hello, world!";
 
-        await playback.Checkpoint();
+        await PlaybackTask.Checkpoint();
         text = playback.CurrentDirection == PlaybackDirection.Forward ? "Running" : text;
-        await playback.Delay(TimeSpan.FromSeconds(1));
+        await PlaybackTask.Delay(TimeSpan.FromSeconds(1));
 
         await foreach (var _ in playback.ForEachOnSeek(TimeSpan.FromSeconds(1))) { }
 
@@ -1405,10 +1405,10 @@ public sealed class TransportStepTests
     {
         var initialText = label.Text;
 
-        await playback.Checkpoint();
+        await PlaybackTask.Checkpoint();
         label.Text =
             playback.CurrentDirection == PlaybackDirection.Forward ? "Running" : initialText;
-        await playback.Delay(TimeSpan.FromSeconds(1));
+        await PlaybackTask.Delay(TimeSpan.FromSeconds(1));
 
         await foreach (var _ in playback.ForEachOnSeek(TimeSpan.FromSeconds(1))) { }
 
@@ -1470,7 +1470,7 @@ public sealed class TransportStepTests
                 restoredStates.Add(state);
             }
 
-            await playback.Checkpoint();
+            await PlaybackTask.Checkpoint();
         }
     }
 
@@ -1484,7 +1484,7 @@ public sealed class TransportStepTests
             playback.Store(0);
         }
 
-        await playback.Checkpoint("decision");
+        await PlaybackTask.Checkpoint("decision");
         var value = 0;
         if (
             playback.CurrentDirection == PlaybackDirection.Backward
@@ -1497,32 +1497,32 @@ public sealed class TransportStepTests
 
         if (value == 0)
         {
-            await playback.Checkpoint("a");
+            await PlaybackTask.Checkpoint("a");
             events.Add("a");
         }
         else if (value == 1)
         {
-            await playback.Checkpoint("b");
+            await PlaybackTask.Checkpoint("b");
             events.Add("b");
         }
         else
         {
-            await playback.Checkpoint("c");
+            await PlaybackTask.Checkpoint("c");
             events.Add("c");
         }
 
-        await playback.Checkpoint("after");
+        await PlaybackTask.Checkpoint("after");
     }
 
     private static async PlaybackTask LogicalStepScenario(Playback playback)
     {
         await LogicalStepHelper(playback);
-        await playback.Checkpoint("outer");
+        await PlaybackTask.Checkpoint("outer");
     }
 
     private static async PlaybackTask LogicalStepHelper(Playback playback)
     {
-        await playback.Checkpoint("inner");
+        await PlaybackTask.Checkpoint("inner");
     }
 
     private static async PlaybackTask TypedHelperScenario(Playback playback, List<string> events)
@@ -1530,12 +1530,12 @@ public sealed class TransportStepTests
         var value = await TypedHelper(playback, events);
         playback.Store(value);
         events.Add("outer:" + value.ToString(CultureInfo.InvariantCulture));
-        await playback.Checkpoint("outer");
+        await PlaybackTask.Checkpoint("outer");
     }
 
     private static async PlaybackTask<int> TypedHelper(Playback playback, List<string> events)
     {
-        await playback.Checkpoint("typed helper");
+        await PlaybackTask.Checkpoint("typed helper");
         events.Add("helper");
         return 7;
     }
@@ -1553,7 +1553,7 @@ public sealed class TransportStepTests
 
         playback.Store(value);
         events.Add("stored");
-        await playback.Checkpoint();
+        await PlaybackTask.Checkpoint();
     }
 
     private static async PlaybackTask TimedEffectScenario(
@@ -1573,7 +1573,7 @@ public sealed class TransportStepTests
         );
 
         events.Add("after");
-        await playback.Checkpoint("after timed effect");
+        await PlaybackTask.Checkpoint("after timed effect");
     }
 
     private static async PlaybackTask EffectThenChildCallScenario(
@@ -1597,7 +1597,7 @@ public sealed class TransportStepTests
 
     private static async PlaybackTask NestedDelay(Playback playback)
     {
-        await playback.Delay(TimeSpan.FromMilliseconds(100), "nested delay");
+        await PlaybackTask.Delay(TimeSpan.FromMilliseconds(100), "nested delay");
     }
 
     private static async PlaybackTask ForwardOnlyEffectScenario(
@@ -1617,12 +1617,12 @@ public sealed class TransportStepTests
             );
         }
 
-        await playback.Checkpoint("state");
+        await PlaybackTask.Checkpoint("state");
 
         if (playback.CurrentDirection == PlaybackDirection.Forward)
             events.Add("after");
 
-        await playback.Checkpoint("after");
+        await PlaybackTask.Checkpoint("after");
     }
 
     private static async PlaybackTask BackwardEffectScenario(Playback playback, List<string> events)
@@ -1630,7 +1630,7 @@ public sealed class TransportStepTests
         if (playback.CurrentDirection == PlaybackDirection.Forward)
             playback.Store("forward");
 
-        await playback.Checkpoint("state");
+        await PlaybackTask.Checkpoint("state");
 
         if (
             playback.CurrentDirection == PlaybackDirection.Backward
@@ -1647,7 +1647,7 @@ public sealed class TransportStepTests
             );
         }
 
-        await playback.Checkpoint("after");
+        await PlaybackTask.Checkpoint("after");
     }
 
     private static async PlaybackTask BackwardNestedEffectScenario(
@@ -1658,7 +1658,7 @@ public sealed class TransportStepTests
         if (playback.CurrentDirection == PlaybackDirection.Forward)
             playback.Store("forward");
 
-        await playback.Checkpoint("state");
+        await PlaybackTask.Checkpoint("state");
 
         if (
             playback.CurrentDirection == PlaybackDirection.Backward
@@ -1668,7 +1668,7 @@ public sealed class TransportStepTests
             await RestoreStateAsync(playback, events, state);
         }
 
-        await playback.Checkpoint("after");
+        await PlaybackTask.Checkpoint("after");
     }
 
     private static async PlaybackTask RestoreStateAsync(
@@ -1704,7 +1704,7 @@ public sealed class TransportStepTests
             events.Add("caught");
         }
 
-        await playback.Checkpoint();
+        await PlaybackTask.Checkpoint();
     }
 
     private static async PlaybackTask EffectCancellationScenario(
@@ -1728,7 +1728,7 @@ public sealed class TransportStepTests
             events.Add("cancelled");
         }
 
-        await playback.Checkpoint();
+        await PlaybackTask.Checkpoint();
     }
 
     private static string Joined(List<string> values)

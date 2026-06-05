@@ -55,6 +55,8 @@ public sealed class Playback
     private int suppressCheckpointAutoContinuationDepth;
     private SeekLoopRecord? suppressLoopExitFor;
 
+    public static Playback? Current => PlaybackRuntime.CurrentPlayback;
+
     public TimeSpan TargetTime { get; private set; }
     public TimeSpan Time { get; private set; }
 
@@ -247,20 +249,20 @@ public sealed class Playback
         ResetTimestamp();
         ClearStoredState();
 
-        PlaybackRuntime.Pushplayback(this);
+        PlaybackRuntime.PushPlayback(this);
         try
         {
             _ = entry(this);
         }
         finally
         {
-            PlaybackRuntime.Popplayback(this);
+            PlaybackRuntime.PopPlayback(this);
         }
     }
 
     public PlaybackTask Yield()
     {
-        EnsureCurrentplayback();
+        EnsureCurrentPlayback();
 
         var promise = new PlaybackPromise(this, PlaybackPromiseKind.Yield)
         {
@@ -275,10 +277,10 @@ public sealed class Playback
 
     public PlaybackTask Delay(TimeSpan duration, string debugLabel = "Delay")
     {
-        EnsureCurrentplayback();
+        var playback = this;
 
-        var record = GetOrCreateDelayRecord(duration, debugLabel);
-        var promise = new PlaybackPromise(this, PlaybackPromiseKind.Delay)
+        var record = playback.GetOrCreateDelayRecord(duration, debugLabel);
+        var promise = new PlaybackPromise(playback, PlaybackPromiseKind.Delay)
         {
             StartTime = record.StartTime,
             Duration = record.Duration,
@@ -289,7 +291,7 @@ public sealed class Playback
         record.ArmDelay(promise);
 
         if (record.Duration == TimeSpan.Zero)
-            Post(() => record.Complete());
+            playback.Post(() => record.Complete());
 
         return new(promise);
     }
@@ -310,7 +312,7 @@ public sealed class Playback
         if (effect == null)
             throw new ArgumentNullException(nameof(effect));
 
-        EnsureCurrentplayback();
+        EnsureCurrentPlayback();
 
         var record = GetOrCreateEffectRecord(
             debugLabel,
@@ -349,7 +351,7 @@ public sealed class Playback
         if (effect == null)
             throw new ArgumentNullException(nameof(effect));
 
-        EnsureCurrentplayback();
+        EnsureCurrentPlayback();
 
         var record = GetOrCreateEffectRecord(
             debugLabel,
@@ -370,7 +372,7 @@ public sealed class Playback
 
     public SeekLoopEnumerable ForEachOnSeek(TimeSpan duration, string debugLabel = "ForEachOnSeek")
     {
-        EnsureCurrentplayback();
+        EnsureCurrentPlayback();
 
         var record = GetOrCreateSeekLoopRecord(duration, debugLabel);
         return new(this, record);
@@ -906,7 +908,7 @@ public sealed class Playback
 
     internal CheckpointTimelineRecord GetOrCreateCheckpointRecord(string debugLabel)
     {
-        EnsureCurrentplayback();
+        EnsureCurrentPlayback();
 
         debugLabel = string.IsNullOrWhiteSpace(debugLabel) ? "Checkpoint" : debugLabel;
 
@@ -2611,11 +2613,11 @@ public sealed class Playback
             throw new InvalidOperationException("playback has not been started.");
     }
 
-    private void EnsureCurrentplayback()
+    private void EnsureCurrentPlayback()
     {
         EnsureStarted();
 
-        if (!ReferenceEquals(PlaybackRuntime.Currentplayback, this))
+        if (!ReferenceEquals(PlaybackRuntime.CurrentPlayback, this))
             throw new InvalidOperationException(
                 "playback awaitables must be created while this playback is active. "
                     + "Start the root method with playback.Start(() => Scenario(playback))."

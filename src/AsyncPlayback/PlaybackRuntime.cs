@@ -11,7 +11,7 @@ internal static class PlaybackRuntime
     [ThreadStatic]
     private static Stack<TimelineRecord>? recordScopes;
 
-    public static Playback? Currentplayback
+    public static Playback? CurrentPlayback
     {
         get
         {
@@ -38,12 +38,12 @@ internal static class PlaybackRuntime
         }
     }
 
-    public static void Pushplayback(Playback playback)
+    public static void PushPlayback(Playback playback)
     {
         (playbacks ??= new()).Push(playback);
     }
 
-    public static void Popplayback(Playback playback)
+    public static void PopPlayback(Playback playback)
     {
         var stack = playbacks;
 

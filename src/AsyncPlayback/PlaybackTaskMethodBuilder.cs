@@ -17,7 +17,7 @@ public sealed class PlaybackTaskMethodBuilder
 
     public static PlaybackTaskMethodBuilder Create()
     {
-        return new(PlaybackTaskMethodBuilderCore.RequireCurrentplayback());
+        return new(PlaybackTaskMethodBuilderCore.RequireCurrentPlayback());
     }
 
     public void Start<TStateMachine>(ref TStateMachine stateMachine)
@@ -75,7 +75,7 @@ public sealed class PlaybackTaskMethodBuilder<T>
 
     public static PlaybackTaskMethodBuilder<T> Create()
     {
-        return new(PlaybackTaskMethodBuilderCore.RequireCurrentplayback());
+        return new(PlaybackTaskMethodBuilderCore.RequireCurrentPlayback());
     }
 
     public void Start<TStateMachine>(ref TStateMachine stateMachine)
@@ -165,9 +165,9 @@ internal sealed class PlaybackTaskMethodBuilderCore
         parentRunner = PlaybackRuntime.CurrentRunner;
     }
 
-    public static Playback RequireCurrentplayback()
+    public static Playback RequireCurrentPlayback()
     {
-        return PlaybackRuntime.Currentplayback
+        return PlaybackRuntime.CurrentPlayback
             ?? throw new InvalidOperationException(
                 "PlaybackTask async methods must be started inside Playback.Start(...)."
             );

@@ -97,7 +97,7 @@ internal sealed class PlaybackRunner<TStateMachine> : IPlaybackRunner
         if (isCompleted)
             return;
 
-        PlaybackRuntime.Pushplayback(playback);
+        PlaybackRuntime.PushPlayback(playback);
         PlaybackRuntime.PushRunner(this);
 
         var pushedScope = false;
@@ -122,7 +122,7 @@ internal sealed class PlaybackRunner<TStateMachine> : IPlaybackRunner
                 PlaybackRuntime.PopRecordScope(scope!);
 
             PlaybackRuntime.PopRunner(this);
-            PlaybackRuntime.Popplayback(playback);
+            PlaybackRuntime.PopPlayback(playback);
         }
     }
 

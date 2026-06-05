@@ -10,9 +10,9 @@ The central idea is small:
 ```csharp
 static async PlaybackTask Scenario(Playback playback)
 {
-    await playback.Checkpoint("start");
-    await playback.Delay(TimeSpan.FromSeconds(1), "wait");
-    await playback.Checkpoint("end");
+    await PlaybackTask.Checkpoint("start");
+    await PlaybackTask.Delay(TimeSpan.FromSeconds(1), "wait");
+    await PlaybackTask.Checkpoint("end");
 }
 ```
 
@@ -160,12 +160,12 @@ Nested `PlaybackTask` methods create nested runners.
 static async PlaybackTask Parent(Playback playback)
 {
     await Child(playback);
-    await playback.Checkpoint("after child");
+    await PlaybackTask.Checkpoint("after child");
 }
 
 static async PlaybackTask Child(Playback playback)
 {
-    await playback.Delay(TimeSpan.FromSeconds(1));
+    await PlaybackTask.Delay(TimeSpan.FromSeconds(1));
 }
 ```
 
@@ -185,11 +185,11 @@ the correct await point.
 
 ## Delay Is Virtual
 
-`playback.Delay(duration)` is not `Task.Delay(duration)`. It records a timed
+`PlaybackTask.Delay(duration)` is not `Task.Delay(duration)`. It records a timed
 segment on the virtual timeline.
 
 ```csharp
-await playback.Delay(TimeSpan.FromSeconds(1));
+await PlaybackTask.Delay(TimeSpan.FromSeconds(1));
 ```
 
 Moving from `00:00:00` to `00:00:00.5` puts playback halfway through that

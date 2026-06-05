@@ -3,7 +3,7 @@ using System.Runtime.CompilerServices;
 namespace AsyncPlayback;
 
 [AsyncMethodBuilder(typeof(PlaybackTaskMethodBuilder))]
-public readonly struct PlaybackTask
+public readonly partial struct PlaybackTask
 {
     internal readonly PlaybackPromise? Promise;
 

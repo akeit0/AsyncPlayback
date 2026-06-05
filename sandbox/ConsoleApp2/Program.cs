@@ -1,4 +1,5 @@
 using AsyncPlayback;
+using static AsyncPlayback.PlaybackTask;
 
 var playback = Playback.Start(Scenario);
 
@@ -19,6 +20,6 @@ static async PlaybackTask Scenario(Playback playback)
     for (var i = 0; i < 5; i++)
     {
         Console.Write(i);
-        await playback.Checkpoint();
+        await Checkpoint();
     }
 }
