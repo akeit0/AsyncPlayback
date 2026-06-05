@@ -1167,10 +1167,8 @@ public sealed class Playback
 
         if (Mode == PlaybackMode.Playback)
         {
-            var existing = TryConsumeExistingCallRecord(label, parentRunner, childRunner);
-
-            if (existing != null)
-                return existing.Value;
+            if (TryConsumeExistingCallRecord(label, parentRunner, childRunner, out var existing))
+                return existing;
 
             SwitchToRecordingFromPlaybackCursor();
         }
@@ -2177,9 +2175,8 @@ public sealed class Playback
 
         if (Mode == PlaybackMode.Playback)
         {
-            var existing = TryConsumeExistingEffectRecord(debugLabel);
-            if (existing != null)
-                return existing.Value;
+            if (TryConsumeExistingEffectRecord(debugLabel, out var existing))
+                return existing;
 
             SwitchToRecordingFromPlaybackCursor();
         }
@@ -2201,9 +2198,8 @@ public sealed class Playback
 
         if (Mode == PlaybackMode.Playback)
         {
-            var existing = TryConsumeExistingDelayRecord(duration, debugLabel);
-            if (existing != null)
-                return existing.Value;
+            if (TryConsumeExistingDelayRecord(duration, debugLabel, out var existing))
+                return existing;
 
             SwitchToRecordingFromPlaybackCursor();
         }
@@ -2225,9 +2221,8 @@ public sealed class Playback
 
         if (Mode == PlaybackMode.Playback)
         {
-            var existing = TryConsumeExistingSeekLoopRecord(duration, debugLabel);
-            if (existing != null)
-                return existing.Value;
+            if (TryConsumeExistingSeekLoopRecord(duration, debugLabel, out var existing))
+                return existing;
 
             SwitchToRecordingFromPlaybackCursor();
         }
@@ -2298,82 +2293,99 @@ public sealed class Playback
         return checkpoint;
     }
 
-    private TimelineRecord? TryConsumeExistingDelayRecord(TimeSpan duration, string debugLabel)
+    private bool TryConsumeExistingDelayRecord(
+        TimeSpan duration,
+        string debugLabel,
+        out TimelineRecord record
+    )
     {
+        record = default;
         if (playbackRecordIndex >= records.Count)
-            return null;
+            return false;
 
         var delay = records[playbackRecordIndex];
         if (delay.Kind != TimelineRecordKind.Delay)
-            return null;
+            return false;
 
         if (delay.StartTime != Time || delay.Duration != duration || delay.DebugLabel != debugLabel)
-            return null;
+            return false;
 
         playbackRecordIndex++;
         SetCurrentRecord(delay.Id);
         EmitTimedRecordStart(delay);
-        return delay;
+        record = delay;
+        return true;
     }
 
-    private TimelineRecord? TryConsumeExistingEffectRecord(string debugLabel)
+    private bool TryConsumeExistingEffectRecord(string debugLabel, out TimelineRecord record)
     {
+        record = default;
         if (playbackRecordIndex >= records.Count)
-            return null;
+            return false;
 
         var effect = records[playbackRecordIndex];
         if (effect.Kind != TimelineRecordKind.Effect)
-            return null;
+            return false;
 
         if (effect.StartTime != Time || effect.DebugLabel != debugLabel)
-            return null;
+            return false;
 
         playbackRecordIndex++;
         SetCurrentRecord(effect.Id);
         EmitTimedRecordStart(effect);
-        return effect;
+        record = effect;
+        return true;
     }
 
-    private TimelineRecord? TryConsumeExistingSeekLoopRecord(TimeSpan duration, string debugLabel)
+    private bool TryConsumeExistingSeekLoopRecord(
+        TimeSpan duration,
+        string debugLabel,
+        out TimelineRecord record
+    )
     {
+        record = default;
         if (playbackRecordIndex >= records.Count)
-            return null;
+            return false;
 
         var loop = records[playbackRecordIndex];
         if (loop.Kind != TimelineRecordKind.SeekLoop)
-            return null;
+            return false;
 
         if (loop.StartTime != Time || loop.Duration != duration || loop.DebugLabel != debugLabel)
-            return null;
+            return false;
 
         playbackRecordIndex++;
         SetCurrentRecord(loop.Id);
         EmitTimedRecordStart(loop);
-        return loop;
+        record = loop;
+        return true;
     }
 
-    private TimelineRecord? TryConsumeExistingCallRecord(
+    private bool TryConsumeExistingCallRecord(
         string debugLabel,
         IPlaybackRunner parentRunner,
-        IPlaybackRunner childRunner
+        IPlaybackRunner childRunner,
+        out TimelineRecord record
     )
     {
+        record = default;
         if (playbackRecordIndex >= records.Count)
-            return null;
+            return false;
 
         var call = records[playbackRecordIndex];
         if (call.Kind != TimelineRecordKind.Call)
-            return null;
+            return false;
 
         if (call.StartTime != Time || call.DebugLabel != debugLabel)
-            return null;
+            return false;
 
         call.RebindRunners(parentRunner, childRunner);
         records[playbackRecordIndex] = call;
 
         playbackRecordIndex++;
         SetCurrentRecord(call.Id);
-        return call;
+        record = call;
+        return true;
     }
 
     private bool IsFutureTargetBanned(TimeSpan targetTime, PlaybackTransportSource source)
