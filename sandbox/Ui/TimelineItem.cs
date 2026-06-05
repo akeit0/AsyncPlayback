@@ -36,27 +36,26 @@ internal sealed record TimelineItem(
                 ),
             ];
 
+        var visibleRecords = records
+            .Where(r => r.Visibility != TimelineRecordVisibility.Infrastructure)
+            .Where(r => r.StartTime <= currentTime)
+            .ToArray();
         var duration = Math.Max(
             2.0,
             Math.Max(
                 currentTime.TotalSeconds,
-                records.Select(r => r.EndTime.TotalSeconds).DefaultIfEmpty(2).Max()
+                visibleRecords.Select(r => Min(r.EndTime, currentTime).TotalSeconds).DefaultIfEmpty(2).Max()
             )
         );
         var contentWidth = ContentWidth(trackWidth);
         var result = new List<TimelineItem>(records.Count + 1);
 
-        foreach (
-            var record in records.Where(r =>
-                r.Visibility != TimelineRecordVisibility.Infrastructure
-            )
-        )
+        foreach (var record in visibleRecords)
         {
             var left = TrackInset + record.StartTime.TotalSeconds / duration * contentWidth;
             var effectiveEnd =
                 record.Kind == TimelineRecordKind.Checkpoint ? record.EndTime
-                : currentTime > record.StartTime && currentTime < record.EndTime ? currentTime
-                : record.EndTime;
+                : Min(record.EndTime, currentTime);
             var width =
                 record.Kind == TimelineRecordKind.Checkpoint
                     ? MinimumRecordWidth
@@ -115,6 +114,11 @@ internal sealed record TimelineItem(
     private static double ContentWidth(double trackWidth)
     {
         return Math.Max(0, trackWidth - TrackInset * 2);
+    }
+
+    private static TimeSpan Min(TimeSpan x, TimeSpan y)
+    {
+        return x <= y ? x : y;
     }
 
     private static string FormatTooltip(TimelineRecordInfo record)

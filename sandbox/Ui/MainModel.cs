@@ -9,8 +9,6 @@ internal partial record MainModel
     private bool running;
     private string labelText = "Hello, world!";
     private double rectWidth;
-    private double manualSeekFrontierSeconds;
-    private double? activeManualSeekCeilingSeconds;
 
     public MainModel()
     {
@@ -64,8 +62,6 @@ internal partial record MainModel
         {
             labelText = "Hello, world!";
             rectWidth = 0;
-            manualSeekFrontierSeconds = 0;
-            activeManualSeekCeilingSeconds = null;
             playback = CreatePlayback();
             await PublishAsync(resetEvents: true);
         }
@@ -89,26 +85,12 @@ internal partial record MainModel
         await MoveToAsync(TimeSpan.FromSeconds(target));
     }
 
-    public void BeginManualSeek()
-    {
-        activeManualSeekCeilingSeconds = playback.Time.TotalSeconds;
-        _ = PublishAsync();
-    }
-
-    public void EndManualSeek()
-    {
-        activeManualSeekCeilingSeconds = null;
-        _ = PublishAsync();
-    }
-
     public double ClampManualSeekSeconds(double seconds)
     {
         if (double.IsNaN(seconds) || double.IsInfinity(seconds))
             return playback.Time.TotalSeconds;
 
-        var ceiling = activeManualSeekCeilingSeconds ?? playback.Time.TotalSeconds;
-        var backwardOnlyCeiling = Math.Min(playback.Time.TotalSeconds, ceiling);
-        return Math.Clamp(seconds, 0, backwardOnlyCeiling);
+        return Math.Clamp(seconds, 0, playback.Time.TotalSeconds);
     }
 
     public async ValueTask MoveBackwardToSeconds(double seconds)
@@ -183,11 +165,6 @@ internal partial record MainModel
         });
     }
 
-    private void PublishVisual()
-    {
-        _ = PublishAsync();
-    }
-
     private ValueTask PublishAsync(bool resetEvents = false)
     {
         return Session.UpdateAsync(state =>
@@ -200,18 +177,12 @@ internal partial record MainModel
 
     private PlaybackUiState CreateUiState(IReadOnlyList<PlaybackEventItem>? events = null)
     {
-        manualSeekFrontierSeconds = Math.Max(manualSeekFrontierSeconds, playback.Time.TotalSeconds);
-
         return PlaybackUiState.FromPlayback(
             playback,
             running,
             labelText,
             rectWidth,
-            ManualSliderMaximumSeconds,
             events
         );
     }
-
-    private double ManualSliderMaximumSeconds =>
-        activeManualSeekCeilingSeconds ?? manualSeekFrontierSeconds;
 }

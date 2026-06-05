@@ -58,7 +58,6 @@ public sealed partial class MainPage : Page
     )
     {
         sliderInputActive = true;
-        model.BeginManualSeek();
         QueueSliderSeek(TransportSlider.Value);
     }
 
@@ -69,7 +68,6 @@ public sealed partial class MainPage : Page
     {
         QueueSliderSeek(TransportSlider.Value);
         sliderInputActive = false;
-        model.EndManualSeek();
     }
 
     private void TransportSlider_OnPointerMoved(
@@ -93,7 +91,6 @@ public sealed partial class MainPage : Page
 
         QueueSliderSeek(TransportSlider.Value);
         sliderInputActive = false;
-        model.EndManualSeek();
     }
 
     private void TransportSlider_OnTapped(
@@ -101,21 +98,17 @@ public sealed partial class MainPage : Page
         Microsoft.UI.Xaml.Input.TappedRoutedEventArgs e
     )
     {
-        model.BeginManualSeek();
         QueueSliderSeek(TransportSlider.Value);
-        model.EndManualSeek();
     }
 
     private void TransportSlider_OnGotFocus(object sender, RoutedEventArgs e)
     {
         sliderKeyboardActive = true;
-        model.BeginManualSeek();
     }
 
     private void TransportSlider_OnLostFocus(object sender, RoutedEventArgs e)
     {
         sliderKeyboardActive = false;
-        model.EndManualSeek();
     }
 
     private void TransportSlider_OnValueChanged(

@@ -64,7 +64,7 @@
                 <Slider
                     x:Name="TransportSlider"
                     Minimum="0"
-                    Maximum="{Binding Session.ManualSliderMaximumSeconds}"
+                    Maximum="{Binding Session.DurationSeconds}"
                     StepFrequency="0.01"
                     Value="{Binding Session.TimeSeconds, Mode=OneWay}"
                     ValueChanged="TransportSlider_OnValueChanged"

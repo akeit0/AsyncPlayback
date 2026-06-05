@@ -9,7 +9,6 @@ internal partial record PlaybackUiState(
     double TimeSeconds,
     double TargetSeconds,
     double DurationSeconds,
-    double ManualSliderMaximumSeconds,
     double RectWidth,
     double TimelineWidth,
     IReadOnlyList<TimelineItem> Records,
@@ -28,12 +27,12 @@ internal partial record PlaybackUiState(
         bool isRunning,
         string labelText,
         double rectWidth,
-        double manualSliderMaximumSeconds,
         IReadOnlyList<PlaybackEventItem>? events = null
     )
     {
         const double timelineWidth = 450.0;
         var duration = Math.Max(2.0, GetTimelineExtentSeconds(playback));
+        var visibleEvents = CutEventsAt(events, playback.Time);
         return new(
             labelText,
             isRunning,
@@ -41,11 +40,10 @@ internal partial record PlaybackUiState(
             playback.Time.TotalSeconds,
             playback.TargetTime.TotalSeconds,
             duration,
-            Math.Max(0, manualSliderMaximumSeconds),
             Math.Clamp(rectWidth, 0, 450),
             timelineWidth,
             TimelineItem.Build(playback.Records, playback.Time, timelineWidth),
-            events ?? []
+            visibleEvents
         );
     }
 
@@ -70,8 +68,19 @@ internal partial record PlaybackUiState(
             isRunning,
             LabelText,
             RectWidth,
-            ManualSliderMaximumSeconds,
             events
         );
+    }
+
+    private static IReadOnlyList<PlaybackEventItem> CutEventsAt(
+        IReadOnlyList<PlaybackEventItem>? events,
+        TimeSpan currentTime
+    )
+    {
+        if (events is not { Count: > 0 })
+            return [];
+
+        var currentSeconds = currentTime.TotalSeconds + 0.000_001;
+        return events.Where(e => e.TimeSeconds <= currentSeconds).ToArray();
     }
 }

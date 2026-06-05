@@ -2,7 +2,7 @@ using AsyncPlayback;
 
 namespace Ui;
 
-internal sealed record PlaybackEventItem(string Text, string Tooltip, Brush Brush)
+internal sealed record PlaybackEventItem(double TimeSeconds, string Text, string Tooltip, Brush Brush)
 {
     public static PlaybackEventItem FromEvent(PlaybackEvent e)
     {
@@ -20,7 +20,7 @@ internal sealed record PlaybackEventItem(string Text, string Tooltip, Brush Brus
             + $"Timestamp: {e.Timestamp}\n"
             + $"Delta: {e.DeltaTime.TotalSeconds:F3}s";
 
-        return new(text, tooltip, BrushFor(e));
+        return new(e.Time.TotalSeconds, text, tooltip, BrushFor(e));
     }
 
     private static Brush BrushFor(PlaybackEvent e)
