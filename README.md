@@ -68,6 +68,15 @@ var step = await r.TryStepBackAsync(PlaybackStepGranularity.Logical);
 Console.WriteLine($"{step.DebugLabel} {step.BoundaryKind}");
 ```
 
+Use `MoveToAsync` for commanded movement. The default mode traverses timeline
+boundaries; `PlaybackMoveMode.TargetOnly` evaluates only the requested target:
+
+```cs
+await r.MoveToAsync(TimeSpan.FromSeconds(2));
+await r.MoveToAsync(TimeSpan.FromSeconds(2), PlaybackMoveMode.TargetOnly);
+await r.MoveToAsync(TimeSpan.FromSeconds(2), evaluateTarget: false);
+```
+
 Use `Effect` for real external async work. Effects are not automatically replayed
 as recorded results. The workflow decides what to do from `CurrentDirection`, and
 can use `Store`, `TryGet`, and `ClearStore` for manual state restoration:

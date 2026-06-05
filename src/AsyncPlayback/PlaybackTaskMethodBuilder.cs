@@ -153,6 +153,18 @@ internal static class FormatStateMachineNameCache<T>
 
 internal sealed class PlaybackTaskMethodBuilderCore
 {
+    private static readonly Action<IPlaybackRunner> MoveRunnerNext = static runner =>
+        runner.MoveNext();
+
+    private static readonly Action<PostedCheckpointResume> ResumeCheckpoint = static checkpoint =>
+    {
+        checkpoint.Runner.ResumeFromAwait(
+            checkpoint.CheckpointId,
+            checkpoint.ExpectedEpoch,
+            checkpoint.ResumeScope
+        );
+    };
+
     private readonly IPlaybackRunner? parentRunner;
     private readonly PlaybackPromiseBase promise;
     private readonly Playback playback;
@@ -201,7 +213,7 @@ internal sealed class PlaybackTaskMethodBuilderCore
             playback.RegisterRunnerEntry(runner, call, $"entry {stateMachineName}");
         }
 
-        playback.Post(runner.MoveNext);
+        playback.Post(runner, MoveRunnerNext);
     }
 
     public void CompleteSuccessfully()
@@ -300,9 +312,16 @@ internal sealed class PlaybackTaskMethodBuilderCore
         var expectedEpoch = typedRunner.Epoch;
 
         if (!playback.SuppressCheckpointAutoContinuation)
-            playback.Post(() =>
-            {
-                typedRunner.ResumeFromAwait(checkpointId, expectedEpoch, resumeScope);
-            });
+            playback.Post(
+                new PostedCheckpointResume(typedRunner, checkpointId, expectedEpoch, resumeScope),
+                ResumeCheckpoint
+            );
     }
+
+    private sealed record PostedCheckpointResume(
+        IPlaybackRunner Runner,
+        int CheckpointId,
+        long ExpectedEpoch,
+        TimelineRecord? ResumeScope
+    );
 }

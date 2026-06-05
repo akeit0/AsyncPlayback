@@ -6,6 +6,12 @@ public enum TransportEvaluation
     Traverse,
 }
 
+public enum PlaybackMoveMode
+{
+    TargetOnly,
+    Traverse,
+}
+
 public readonly record struct TransportOptions(TransportEvaluation Evaluation, bool EvaluateTarget)
 {
     public static TransportOptions TargetOnly { get; } = new(TransportEvaluation.TargetOnly, true);
@@ -27,25 +33,62 @@ public readonly record struct StepResult(
 
 public sealed class Playback
 {
+    private static readonly Action<PlaybackPromise> CompletePromise = static promise =>
+        promise.TrySetResult();
+
+    private static readonly Action<PlaybackPromise<bool>> CompleteBoolPromiseWithFalse =
+        static promise => promise.TrySetResult(false);
+
+    private static readonly Action<PostedDelayCompletion> CompleteDelay = static completion =>
+        completion.Playback.recordRuntime.CompleteDelay(completion.Record);
+
+    private static readonly Action<IPlaybackRunner> MoveRunnerNext = static runner =>
+        runner.MoveNext();
+
+    private static readonly Action<PostedCheckpointResume> ResumeCheckpoint = static resume =>
+    {
+        resume.Runner.ResumeFromAwait(resume.CheckpointId, resume.ExpectedEpoch, resume.ResumeScope);
+    };
+
+    private static readonly Action<PostedEffectCompletion> CompletePostedEffect =
+        static completion =>
+        {
+            completion.Playback.CompleteEffect(
+                completion.Record,
+                completion.Promise,
+                completion.StartTimestamp,
+                completion.EndTimestamp,
+                completion.Direction,
+                completion.Result
+            );
+        };
+
+    private static readonly Action<PostedEffectFailure> FailPostedEffect = static failure =>
+    {
+        failure.Playback.FailEffect(
+            failure.Record,
+            failure.Promise,
+            failure.StartTimestamp,
+            failure.EndTimestamp,
+            failure.Direction,
+            failure.Exception
+        );
+    };
+
     private readonly List<SeekLoopRecord> activeSeekLoops = [];
-    private readonly object readyGate = new();
-    private readonly Queue<Action> ready = [];
-    private readonly SemaphoreSlim readySignal = new(0);
+    private readonly PlaybackScheduler scheduler = new();
+    private readonly PlaybackStateStore stateStore = new();
+    private readonly TimelineRecordRuntime recordRuntime = new();
     private readonly List<TimelineRecord> records = [];
-    private readonly Dictionary<RunnerStateKey, TimelineCheckpoint> storeCheckpoints = [];
     private bool hasTimestamp;
     private int suppressAwaitPointTimestampSamplingDepth;
-    private object? storedState;
     private long timestamp;
     private long checkpointSequence;
     private TimelineRecord? currentRecord;
     private CheckpointTimelineRecord? pendingForwardCheckpoint;
-    private long generation;
     private BoundaryCursor? boundaryCursor;
     private int nextRecordId;
-    private int pendingExternalEffects;
     private int playbackRecordIndex;
-    private bool hasStoredState;
     private PlaybackEdgeCursor edgeCursor;
     private CancellationToken currentCancellationToken;
     private PlaybackDirection currentDirection = PlaybackDirection.Forward;
@@ -82,61 +125,27 @@ public sealed class Playback
     {
         EnsureStarted();
 
-        storedState = state;
-        hasStoredState = true;
-
-        CaptureStoreAtCurrentState();
+        stateStore.Store(state);
+        stateStore.CaptureAtCurrentRunner();
     }
 
     public void ClearStore()
     {
         EnsureStarted();
 
-        ClearStoredState();
-        CaptureStoreAtCurrentState();
-    }
-
-    private void CaptureStoreAtCurrentState()
-    {
-        if (TryGetCurrentStoreCheckpoint(out var checkpoint))
-            checkpoint.ResumeStoreSnapshot = CaptureStoreSnapshot();
-    }
-
-    private bool TryGetCurrentStoreCheckpoint(out TimelineCheckpoint checkpoint)
-    {
-        var runner = PlaybackRuntime.CurrentRunner;
-        if (runner == null)
-        {
-            checkpoint = null!;
-            return false;
-        }
-
-        return storeCheckpoints.TryGetValue(
-            new(runner, runner.CurrentStateCheckpointId),
-            out checkpoint!
-        );
+        stateStore.Clear();
+        stateStore.CaptureAtCurrentRunner();
     }
 
     private void StoreAtCurrentStateIfMissing<T>(T state)
         where T : notnull
     {
-        var hasCheckpoint = TryGetCurrentStoreCheckpoint(out var checkpoint);
-        if (hasCheckpoint && checkpoint.ResumeStoreSnapshot != null)
-        {
-            RestoreStoreSnapshot(checkpoint.ResumeStoreSnapshot);
-            return;
-        }
-
-        storedState = state;
-        hasStoredState = true;
-
-        if (hasCheckpoint)
-            checkpoint.ResumeStoreSnapshot = CaptureStoreSnapshot();
+        stateStore.StoreAtCurrentRunnerIfMissing(state);
     }
 
     private void BindStoreCheckpoint(TimelineCheckpoint checkpoint)
     {
-        BindStoreCheckpoint(checkpoint.Runner, checkpoint.CheckpointId, checkpoint);
+        stateStore.Bind(checkpoint);
     }
 
     private void BindStoreCheckpoint(
@@ -145,33 +154,13 @@ public sealed class Playback
         TimelineCheckpoint checkpoint
     )
     {
-        storeCheckpoints[new(runner, checkpointId)] = checkpoint;
+        stateStore.Bind(runner, checkpointId, checkpoint);
     }
 
     public bool TryGet<T>(out T state)
     {
         EnsureStarted();
-
-        if (!hasStoredState)
-        {
-            state = default!;
-            return false;
-        }
-
-        if (storedState == null)
-        {
-            state = default!;
-            return default(T) is null;
-        }
-
-        if (storedState is not T value)
-        {
-            state = default!;
-            return false;
-        }
-
-        state = value;
-        return true;
+        return stateStore.TryGet(out state);
     }
 
     public T SelectByDirection<T>(T backwardStore, T forward)
@@ -245,9 +234,8 @@ public sealed class Playback
         Mode = PlaybackMode.Recording;
         playbackRecordIndex = 0;
         edgeCursor = PlaybackEdgeCursor.None;
-        storeCheckpoints.Clear();
+        stateStore.Reset();
         ResetTimestamp();
-        ClearStoredState();
 
         PlaybackRuntime.PushPlayback(this);
         try
@@ -271,7 +259,7 @@ public sealed class Playback
             DueTime = Time,
         };
 
-        Post(() => promise.TrySetResult());
+        Post(promise, CompletePromise);
         return new(promise);
     }
 
@@ -288,10 +276,10 @@ public sealed class Playback
             OwnerRecord = record,
         };
 
-        record.ArmDelay(promise);
+        recordRuntime.ArmDelay(record, promise);
 
         if (record.Duration == TimeSpan.Zero)
-            playback.Post(() => record.Complete());
+            playback.Post(new PostedDelayCompletion(playback, record), CompleteDelay);
 
         return new(promise);
     }
@@ -385,10 +373,13 @@ public sealed class Playback
 
         var suppressExit =
             Time >= record.EndTime
-            && record.FinalTrueDelivered
+            && recordRuntime.HasDeliveredFinalSeekLoopTrue(record)
             && ReferenceEquals(suppressLoopExitFor, record);
 
-        var isExitMoveNext = Time >= record.EndTime && record.FinalTrueDelivered && !suppressExit;
+        var isExitMoveNext =
+            Time >= record.EndTime
+            && recordRuntime.HasDeliveredFinalSeekLoopTrue(record)
+            && !suppressExit;
 
         var ownerRecord = isExitMoveNext
             ? GetOrCreateImplicitCheckpointRecord($"exit {record.DebugLabel}")
@@ -408,11 +399,11 @@ public sealed class Playback
             // true sample. It represents the continuation after await foreach.
             // The promise must complete with false, but the checkpoint belongs
             // to the implicit exit checkpoint record rather than the loop body.
-            Post(() => promise.TrySetResult(false));
+            Post(promise, CompleteBoolPromiseWithFalse);
             return new(promise);
         }
 
-        record.ArmMoveNext(promise);
+        recordRuntime.ArmSeekLoopMoveNext(record, promise);
 
         if (!activeSeekLoops.Contains(record))
             activeSeekLoops.Add(record);
@@ -421,6 +412,11 @@ public sealed class Playback
             suppressLoopExitFor = null;
 
         return new(promise);
+    }
+
+    internal TimeSpan GetSeekLoopElapsed(SeekLoopRecord record)
+    {
+        return recordRuntime.GetSeekLoopElapsed(record);
     }
 
     public ValueTask MoveByAsync(
@@ -480,9 +476,31 @@ public sealed class Playback
         await MoveByAsync(-DeltaTime, options, cancellationToken).ConfigureAwait(false);
     }
 
-    public ValueTask MoveToAsync(TimeSpan targetTime, CancellationToken cancellationToken = default)
+    public ValueTask MoveToAsync(
+        TimeSpan targetTime,
+        PlaybackMoveMode mode = PlaybackMoveMode.Traverse,
+        PlaybackDirection? direction = null,
+        bool evaluateTarget = true,
+        CancellationToken cancellationToken = default
+    )
     {
-        return MoveToAsync(targetTime, TransportOptions.Traverse, cancellationToken);
+        return TransportToAsync(
+            targetTime,
+            new(ToTransportEvaluation(mode), evaluateTarget),
+            direction,
+            cancellationToken
+        );
+    }
+
+    public ValueTask MoveToAsync(TimeSpan targetTime, CancellationToken cancellationToken)
+    {
+        return MoveToAsync(
+            targetTime,
+            PlaybackMoveMode.Traverse,
+            direction: null,
+            evaluateTarget: true,
+            cancellationToken
+        );
     }
 
     public ValueTask MoveToAsync(
@@ -491,7 +509,13 @@ public sealed class Playback
         CancellationToken cancellationToken = default
     )
     {
-        return TransportToAsync(targetTime, options, null, cancellationToken);
+        return MoveToAsync(
+            targetTime,
+            ToMoveMode(options.Evaluation),
+            direction: null,
+            evaluateTarget: options.EvaluateTarget,
+            cancellationToken
+        );
     }
 
     public ValueTask MoveToAsync(
@@ -500,7 +524,13 @@ public sealed class Playback
         CancellationToken cancellationToken = default
     )
     {
-        return MoveToAsync(targetTime, direction, TransportOptions.Traverse, cancellationToken);
+        return MoveToAsync(
+            targetTime,
+            PlaybackMoveMode.Traverse,
+            direction,
+            evaluateTarget: true,
+            cancellationToken
+        );
     }
 
     public ValueTask MoveToAsync(
@@ -510,7 +540,13 @@ public sealed class Playback
         CancellationToken cancellationToken = default
     )
     {
-        return TransportToAsync(targetTime, options, direction, cancellationToken);
+        return MoveToAsync(
+            targetTime,
+            ToMoveMode(options.Evaluation),
+            direction,
+            evaluateTarget: options.EvaluateTarget,
+            cancellationToken
+        );
     }
 
     public ValueTask SeekToAsync(TimeSpan targetTime, CancellationToken cancellationToken = default)
@@ -524,7 +560,13 @@ public sealed class Playback
         CancellationToken cancellationToken = default
     )
     {
-        return TransportToAsync(targetTime, options, null, cancellationToken);
+        return MoveToAsync(
+            targetTime,
+            ToMoveMode(options.Evaluation),
+            direction: null,
+            evaluateTarget: options.EvaluateTarget,
+            cancellationToken
+        );
     }
 
     public ValueTask<StepResult> TryStepForwardAsync(CancellationToken cancellationToken = default)
@@ -676,10 +718,10 @@ public sealed class Playback
             while (TryRunOneReady())
                 await Task.Yield();
 
-            if (Volatile.Read(ref pendingExternalEffects) == 0)
+            if (!scheduler.HasPendingExternalEffects)
                 return;
 
-            await readySignal.WaitAsync(cancellationToken).ConfigureAwait(false);
+            await scheduler.WaitForWorkAsync(cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -727,32 +769,21 @@ public sealed class Playback
                 return new(true, position);
             }
 
-            if (Volatile.Read(ref pendingExternalEffects) == 0)
+            if (!scheduler.HasPendingExternalEffects)
                 return default;
 
-            await readySignal.WaitAsync(cancellationToken).ConfigureAwait(false);
+            await scheduler.WaitForWorkAsync(cancellationToken).ConfigureAwait(false);
         }
     }
 
     private bool TryRunOneReady()
     {
-        Action? action;
-        lock (readyGate)
-        {
-            if (ready.Count == 0)
-                return false;
-
-            action = ready.Dequeue();
-        }
-
-        action();
-        return true;
+        return scheduler.TryRunOneReady();
     }
 
     private bool HasReady()
     {
-        lock (readyGate)
-            return ready.Count != 0;
+        return scheduler.HasReady;
     }
 
     private async ValueTask<InitialEdgeResult> TryEvaluateInitialForwardEdgeAsync(
@@ -823,22 +854,10 @@ public sealed class Playback
         return null;
     }
 
-    internal void Post(Action action)
+    internal void Post<TState>(TState state, Action<TState> action)
+        where TState : class
     {
-        if (action == null)
-            throw new ArgumentNullException(nameof(action));
-
-        var generation = this.generation;
-        lock (readyGate)
-        {
-            ready.Enqueue(() =>
-            {
-                if (generation == this.generation)
-                    action();
-            });
-        }
-
-        readySignal.Release();
+        scheduler.Post(state, action);
     }
 
     internal void AttachRootRunner(IPlaybackRunner runner)
@@ -1721,14 +1740,15 @@ public sealed class Playback
         PlaybackDirection direction
     )
     {
-        var mustRestore = direction == PlaybackDirection.Backward || !delay.HasPendingDelay;
+        var mustRestore =
+            direction == PlaybackDirection.Backward || !recordRuntime.HasPendingDelay(delay);
 
         if (mustRestore)
             RestoreToRecord(delay);
 
         MoveTimeTo(targetTime);
 
-        delay.Complete();
+        recordRuntime.CompleteDelay(delay);
         await RunReadyAsync(currentCancellationToken).ConfigureAwait(false);
 
         currentRecord = delay;
@@ -1769,7 +1789,7 @@ public sealed class Playback
         if (direction == PlaybackDirection.Backward && targetTime == loop.EndTime)
             suppressLoopExitFor = loop;
 
-        loop.EmitTrueAt(targetTime);
+        recordRuntime.EmitSeekLoopTrueAt(loop, targetTime);
         await RunReadyAsync(currentCancellationToken).ConfigureAwait(false);
 
         currentRecord = loop;
@@ -1819,7 +1839,7 @@ public sealed class Playback
     private SeekLoopRecord? FindActiveSeekLoop(SeekLoopRecord loop)
     {
         foreach (var active in activeSeekLoops)
-            if (ReferenceEquals(active, loop) && active.HasPendingMoveNext)
+            if (ReferenceEquals(active, loop) && recordRuntime.HasPendingSeekLoopMoveNext(active))
                 return active;
 
         return null;
@@ -2038,6 +2058,7 @@ public sealed class Playback
         playbackRecordIndex = records.Count;
 
         RebuildRecordIndexes();
+        recordRuntime.TrimTo(records);
     }
 
     private void RebuildRecordIndexes()
@@ -2065,8 +2086,9 @@ public sealed class Playback
 
     private void MoveToTimelineGap(TimeSpan targetTime)
     {
-        ready.Clear();
+        scheduler.ResetReady();
         activeSeekLoops.Clear();
+        recordRuntime.Reset();
         suppressLoopExitFor = null;
         pendingForwardCheckpoint = null;
 
@@ -2113,16 +2135,13 @@ public sealed class Playback
 
     private void RestoreRunnerTreeTo(TimelineCheckpoint target, bool reconnectParentContinuations)
     {
-        generation++;
-        ready.Clear();
+        scheduler.ResetReady();
         activeSeekLoops.Clear();
         suppressLoopExitFor = null;
         pendingForwardCheckpoint = null;
 
-        foreach (var record in records)
-            record.ResetPlaybackState();
-
         RebuildRecordIndexes();
+        recordRuntime.Reset();
 
         playbackRecordIndex = target.RecordCountAtCapture;
         Mode = PlaybackMode.Playback;
@@ -2166,12 +2185,12 @@ public sealed class Playback
 
     private StoreSnapshot CaptureStoreSnapshot()
     {
-        return new(hasStoredState, storedState);
+        return stateStore.CaptureSnapshot();
     }
 
     private void RestoreResumeStoreSnapshot(TimelineCheckpoint checkpoint)
     {
-        RestoreStoreSnapshot(checkpoint.ResumeStoreSnapshot ?? checkpoint.StoreSnapshot);
+        stateStore.RestoreResume(checkpoint);
     }
 
     private void StartEffect(EffectRecord record, PlaybackPromiseBase promise)
@@ -2179,7 +2198,7 @@ public sealed class Playback
         var cancellationToken = currentCancellationToken;
         var startTimestamp = TimeProvider.GetTimestamp();
         var direction = currentDirection;
-        Interlocked.Increment(ref pendingExternalEffects);
+        scheduler.BeginExternalEffect();
 
         _ = RunEffectAsync(record, promise, startTimestamp, direction, cancellationToken);
     }
@@ -2196,21 +2215,38 @@ public sealed class Playback
         {
             var result = await record.ExecuteAsync(cancellationToken).ConfigureAwait(false);
             var endTimestamp = TimeProvider.GetTimestamp();
-            Post(() =>
-                CompleteEffect(record, promise, startTimestamp, endTimestamp, direction, result)
+            Post(
+                new PostedEffectCompletion(
+                    this,
+                    record,
+                    promise,
+                    startTimestamp,
+                    endTimestamp,
+                    direction,
+                    result
+                ),
+                CompletePostedEffect
             );
         }
         catch (Exception exception)
         {
             var endTimestamp = TimeProvider.GetTimestamp();
-            Post(() =>
-                FailEffect(record, promise, startTimestamp, endTimestamp, direction, exception)
+            Post(
+                new PostedEffectFailure(
+                    this,
+                    record,
+                    promise,
+                    startTimestamp,
+                    endTimestamp,
+                    direction,
+                    exception
+                ),
+                FailPostedEffect
             );
         }
         finally
         {
-            Interlocked.Decrement(ref pendingExternalEffects);
-            readySignal.Release();
+            scheduler.EndExternalEffect();
         }
     }
 
@@ -2267,20 +2303,7 @@ public sealed class Playback
 
     private void RestoreStoreSnapshot(StoreSnapshot? snapshot)
     {
-        if (snapshot is { HasValue: true })
-        {
-            storedState = snapshot.Value;
-            hasStoredState = true;
-            return;
-        }
-
-        ClearStoredState();
-    }
-
-    private void ClearStoredState()
-    {
-        storedState = null;
-        hasStoredState = false;
+        stateStore.Restore(snapshot);
     }
 
     private static List<IPlaybackRunner> BuildRunnerChain(IPlaybackRunner runner)
@@ -2299,16 +2322,13 @@ public sealed class Playback
         if (rootRunner == null)
             throw new InvalidOperationException("Root runner has not been created.");
 
-        generation++;
-        ready.Clear();
+        scheduler.ResetReady();
         activeSeekLoops.Clear();
         suppressLoopExitFor = null;
         pendingForwardCheckpoint = null;
 
-        foreach (var record in records)
-            record.ResetPlaybackState();
-
         RebuildRecordIndexes();
+        recordRuntime.Reset();
 
         playbackRecordIndex = GetInitialPlaybackIndex();
         currentRecord = null;
@@ -2322,7 +2342,7 @@ public sealed class Playback
         MoveTimeTo(TimeSpan.Zero);
 
         if (postReady)
-            Post(rootRunner.MoveNext);
+            Post(rootRunner, MoveRunnerNext);
     }
 
     private int GetInitialPlaybackIndex()
@@ -2350,14 +2370,15 @@ public sealed class Playback
                 var expectedEpoch = checkpoint.Runner.Epoch;
                 var resumeScope = checkpoint.ResumeScope;
 
-                Post(() =>
-                {
-                    checkpoint.Runner.ResumeFromAwait(
+                Post(
+                    new PostedCheckpointResume(
+                        checkpoint.Runner,
                         checkpoint.CheckpointId,
                         expectedEpoch,
                         resumeScope
-                    );
-                });
+                    ),
+                    ResumeCheckpoint
+                );
 
                 break;
             }
@@ -2377,7 +2398,7 @@ public sealed class Playback
                     checkpoint.ResumeScope
                 );
 
-                Post(() => promise.TrySetResult());
+                Post(promise, CompletePromise);
                 break;
             }
 
@@ -2400,10 +2421,10 @@ public sealed class Playback
                     promise.OwnerRecord as DelayRecord
                     ?? throw new InvalidOperationException("Delay checkpoint has no delay record.");
 
-                delay.ArmDelay(promise);
+                recordRuntime.ArmDelay(delay, promise);
 
                 if (delay.Duration == TimeSpan.Zero)
-                    Post(() => delay.Complete());
+                    Post(new PostedDelayCompletion(this, delay), CompleteDelay);
 
                 break;
             }
@@ -2451,7 +2472,7 @@ public sealed class Playback
                 switch (promise.OwnerRecord)
                 {
                     case SeekLoopRecord loop:
-                        loop.ArmMoveNext(promise);
+                        recordRuntime.ArmSeekLoopMoveNext(loop, promise);
 
                         if (!activeSeekLoops.Contains(loop))
                             activeSeekLoops.Add(loop);
@@ -2461,7 +2482,7 @@ public sealed class Playback
                     case CheckpointTimelineRecord:
                         // This is the implicit await-foreach exit checkpoint.
                         // Resume the state machine with MoveNextAsync() == false.
-                        Post(() => promise.TrySetResult(false));
+                        Post(promise, CompleteBoolPromiseWithFalse);
                         break;
 
                     default:
@@ -2560,6 +2581,26 @@ public sealed class Playback
         };
     }
 
+    private static TransportEvaluation ToTransportEvaluation(PlaybackMoveMode mode)
+    {
+        return mode switch
+        {
+            PlaybackMoveMode.TargetOnly => TransportEvaluation.TargetOnly,
+            PlaybackMoveMode.Traverse => TransportEvaluation.Traverse,
+            _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, null),
+        };
+    }
+
+    private static PlaybackMoveMode ToMoveMode(TransportEvaluation evaluation)
+    {
+        return evaluation switch
+        {
+            TransportEvaluation.TargetOnly => PlaybackMoveMode.TargetOnly,
+            TransportEvaluation.Traverse => PlaybackMoveMode.Traverse,
+            _ => throw new ArgumentOutOfRangeException(nameof(evaluation), evaluation, null),
+        };
+    }
+
     private static long AbsTicks(TimeSpan value)
     {
         return value.Ticks == long.MinValue ? long.MaxValue : Math.Abs(value.Ticks);
@@ -2570,7 +2611,34 @@ public sealed class Playback
         TimelineBoundary Boundary
     );
 
-    private readonly record struct RunnerStateKey(IPlaybackRunner Runner, int CheckpointId);
+    private sealed record PostedCheckpointResume(
+        IPlaybackRunner Runner,
+        int CheckpointId,
+        long ExpectedEpoch,
+        TimelineRecord? ResumeScope
+    );
+
+    private sealed record PostedDelayCompletion(Playback Playback, DelayRecord Record);
+
+    private sealed record PostedEffectCompletion(
+        Playback Playback,
+        EffectRecord Record,
+        PlaybackPromiseBase Promise,
+        long StartTimestamp,
+        long EndTimestamp,
+        PlaybackDirection Direction,
+        object? Result
+    );
+
+    private sealed record PostedEffectFailure(
+        Playback Playback,
+        EffectRecord Record,
+        PlaybackPromiseBase Promise,
+        long StartTimestamp,
+        long EndTimestamp,
+        PlaybackDirection Direction,
+        Exception Exception
+    );
 
     private enum PlaybackEdgeCursor
     {

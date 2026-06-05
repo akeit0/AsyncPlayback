@@ -126,7 +126,6 @@ internal abstract class TimelineRecord
         return depth;
     }
 
-    public virtual void ResetPlaybackState() { }
 }
 
 internal sealed class CheckpointTimelineRecord : TimelineRecord
@@ -147,33 +146,8 @@ internal sealed class CheckpointTimelineRecord : TimelineRecord
 
 internal sealed class DelayRecord : TimelineRecord
 {
-    private PlaybackPromise? pendingDelay;
-
     public DelayRecord(int id, TimeSpan startTime, TimeSpan duration, string debugLabel)
         : base(id, TimelineRecordKind.Delay, startTime, duration, debugLabel) { }
-
-    public bool HasPendingDelay => pendingDelay is { IsCompleted: false };
-
-    public void ArmDelay(PlaybackPromise promise)
-    {
-        pendingDelay = promise ?? throw new ArgumentNullException(nameof(promise));
-    }
-
-    public bool Complete()
-    {
-        var promise = pendingDelay;
-
-        if (promise is not { IsCompleted: false })
-            return false;
-
-        pendingDelay = null;
-        return promise.TrySetResult();
-    }
-
-    public override void ResetPlaybackState()
-    {
-        pendingDelay = null;
-    }
 }
 
 internal sealed class EffectRecord : TimelineRecord
@@ -202,62 +176,8 @@ internal sealed class EffectRecord : TimelineRecord
 
 internal sealed class SeekLoopRecord : TimelineRecord
 {
-    private PlaybackPromise<bool>? pendingMoveNext;
-
     public SeekLoopRecord(int id, TimeSpan startTime, TimeSpan duration, string debugLabel)
         : base(id, TimelineRecordKind.SeekLoop, startTime, duration, debugLabel) { }
-
-    public TimeSpan CurrentElapsed { get; private set; }
-    public bool FinalTrueDelivered { get; private set; }
-
-    public bool HasPendingMoveNext => pendingMoveNext is { IsCompleted: false };
-
-    public void ArmMoveNext(PlaybackPromise<bool> promise)
-    {
-        pendingMoveNext = promise ?? throw new ArgumentNullException(nameof(promise));
-    }
-
-    public bool EmitTrueAt(TimeSpan playbackTime)
-    {
-        var promise = pendingMoveNext;
-
-        if (promise is not { IsCompleted: false })
-            return false;
-
-        var elapsed = playbackTime - StartTime;
-
-        if (elapsed < TimeSpan.Zero)
-            elapsed = TimeSpan.Zero;
-
-        if (elapsed > Duration)
-            elapsed = Duration;
-
-        CurrentElapsed = elapsed;
-
-        if (elapsed == Duration)
-            FinalTrueDelivered = true;
-
-        pendingMoveNext = null;
-        return promise.TrySetResult(true);
-    }
-
-    public bool CompleteFalse()
-    {
-        var promise = pendingMoveNext;
-
-        if (promise is not { IsCompleted: false })
-            return false;
-
-        pendingMoveNext = null;
-        return promise.TrySetResult(false);
-    }
-
-    public override void ResetPlaybackState()
-    {
-        pendingMoveNext = null;
-        CurrentElapsed = default;
-        FinalTrueDelivered = false;
-    }
 }
 
 internal sealed class CallTimelineRecord : TimelineRecord

@@ -309,8 +309,13 @@ Commanded movement does not wait for real time:
 ```csharp
 await playback.MoveByAsync(-TimeSpan.FromSeconds(0.4));
 await playback.MoveToAsync(TimeSpan.FromSeconds(2));
-await playback.SeekToAsync(TimeSpan.FromSeconds(2));
+await playback.MoveToAsync(TimeSpan.FromSeconds(2), PlaybackMoveMode.TargetOnly);
 ```
+
+`MoveToAsync` is the primary commanded movement API. `PlaybackMoveMode.Traverse`
+walks timeline boundaries between the current time and target time, while
+`PlaybackMoveMode.TargetOnly` evaluates only the requested target. Pass
+`evaluateTarget: false` to reposition without evaluating the target record.
 
 Tests should use `FakeTimeProvider` from
 `Microsoft.Extensions.TimeProvider.Testing`:

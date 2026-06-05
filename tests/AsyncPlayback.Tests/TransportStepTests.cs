@@ -167,6 +167,20 @@ public sealed class TransportStepTests
     }
 
     [Test]
+    public async Task MoveToAsync_NewApiCanUseExplicitDirectionForSameTimeEdge()
+    {
+        var directions = new List<PlaybackDirection>();
+        var playback = Playback.Start(r => TerminalEdgeDirectionScenario(r, directions));
+
+        await playback.RunToEndAsync();
+        directions.Clear();
+
+        await playback.MoveToAsync(TimeSpan.Zero, direction: PlaybackDirection.Backward);
+
+        await Assert.That(directions).IsEquivalentTo([PlaybackDirection.Backward]);
+    }
+
+    [Test]
     public async Task MoveToAsync_CanUseExplicitForwardDirectionForSameTimeInitialEdge()
     {
         var directions = new List<PlaybackDirection>();
@@ -654,6 +668,33 @@ public sealed class TransportStepTests
         await playback.MoveByAsync(TimeSpan.FromSeconds(0.5));
 
         await Assert.That(Joined(events)).IsEqualTo("seek:0.25,seek:0.5,seek:1");
+    }
+
+    [Test]
+    public async Task MoveToAsync_TargetOnly_EvaluatesOnlyTarget()
+    {
+        var events = new List<string>();
+        var playback = Playback.Start(r => SeekLoopScenario(r, events));
+
+        await playback.MoveToAsync(TimeSpan.FromSeconds(1), PlaybackMoveMode.TargetOnly);
+
+        await Assert.That(Joined(events)).IsEqualTo("seek:1");
+    }
+
+    [Test]
+    public async Task MoveToAsync_CanSkipTargetEvaluation()
+    {
+        var events = new List<string>();
+        var playback = Playback.Start(r => SeekLoopScenario(r, events));
+
+        await playback.MoveToAsync(
+            TimeSpan.FromSeconds(1),
+            PlaybackMoveMode.TargetOnly,
+            evaluateTarget: false
+        );
+
+        await Assert.That(playback.Time).IsEqualTo(TimeSpan.FromSeconds(1));
+        await Assert.That(Joined(events)).IsEmpty();
     }
 
     [Test]

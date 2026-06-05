@@ -32,7 +32,7 @@ public readonly struct SeekLoopEnumerator
     {
         get
         {
-            var elpased = record.CurrentElapsed;
+            var elpased = playback.GetSeekLoopElapsed(record);
             var progress =
                 record.Duration > TimeSpan.Zero
                     ? elpased.TotalSeconds / record.Duration.TotalSeconds

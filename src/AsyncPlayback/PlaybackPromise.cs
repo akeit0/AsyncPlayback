@@ -2,7 +2,12 @@ namespace AsyncPlayback;
 
 public abstract class PlaybackPromiseBase
 {
-    private readonly List<IContinuation> continuations = [];
+    private static readonly Action<RunnerContinuation> InvokeRunnerContinuation = static state =>
+        state.Invoke();
+
+    private static readonly Action<Action> InvokeRawContinuation = static action => action();
+
+    private readonly List<PendingContinuation> continuations = [];
 
     private readonly Playback playback;
     private Exception? exception;
@@ -76,7 +81,9 @@ public abstract class PlaybackPromiseBase
         TimelineRecord? resumeScope
     )
     {
-        var continuation = new RunnerContinuation(runner, checkpointId, expectedEpoch, resumeScope);
+        var continuation = PendingContinuation.ForRunner(
+            new(runner, checkpointId, expectedEpoch, resumeScope)
+        );
 
         if (status == PromiseStatus.Pending)
         {
@@ -84,7 +91,7 @@ public abstract class PlaybackPromiseBase
             return;
         }
 
-        playback.Post(continuation.Invoke);
+        continuation.Post(playback);
     }
 
     public void AddRawContinuation(Action action)
@@ -92,7 +99,7 @@ public abstract class PlaybackPromiseBase
         if (action == null)
             throw new ArgumentNullException(nameof(action));
 
-        var continuation = new RawContinuation(action);
+        var continuation = PendingContinuation.ForRaw(action);
 
         if (status == PromiseStatus.Pending)
         {
@@ -100,7 +107,7 @@ public abstract class PlaybackPromiseBase
             return;
         }
 
-        playback.Post(continuation.Invoke);
+        continuation.Post(playback);
     }
 
     private void FlushContinuations()
@@ -112,7 +119,7 @@ public abstract class PlaybackPromiseBase
         this.continuations.Clear();
 
         foreach (var continuation in continuations)
-            playback.Post(continuation.Invoke);
+            continuation.Post(playback);
     }
 
     private enum PromiseStatus
@@ -122,12 +129,58 @@ public abstract class PlaybackPromiseBase
         Faulted,
     }
 
-    private interface IContinuation
+    private readonly struct PendingContinuation
     {
-        void Invoke();
+        private readonly PendingContinuationKind kind;
+        private readonly RunnerContinuation? runner;
+        private readonly Action? rawAction;
+
+        private PendingContinuation(
+            PendingContinuationKind kind,
+            RunnerContinuation? runner,
+            Action? rawAction
+        )
+        {
+            this.kind = kind;
+            this.runner = runner;
+            this.rawAction = rawAction;
+        }
+
+        public static PendingContinuation ForRunner(RunnerContinuation runner)
+        {
+            return new(PendingContinuationKind.Runner, runner, null);
+        }
+
+        public static PendingContinuation ForRaw(Action action)
+        {
+            return new(PendingContinuationKind.Raw, null, action);
+        }
+
+        public void Post(Playback playback)
+        {
+            switch (kind)
+            {
+                case PendingContinuationKind.Runner:
+                    playback.Post(runner!, InvokeRunnerContinuation);
+                    break;
+
+                case PendingContinuationKind.Raw:
+                    playback.Post(rawAction!, InvokeRawContinuation);
+                    break;
+
+                default:
+                    throw new InvalidOperationException("Unknown continuation kind.");
+            }
+        }
     }
 
-    private readonly struct RunnerContinuation : IContinuation
+    private enum PendingContinuationKind
+    {
+        Runner,
+        Raw,
+    }
+
+    private sealed class RunnerContinuation
     {
         private readonly IPlaybackRunner runner;
         private readonly int checkpointId;
@@ -153,20 +206,6 @@ public abstract class PlaybackPromiseBase
         }
     }
 
-    private readonly struct RawContinuation : IContinuation
-    {
-        private readonly Action action;
-
-        public RawContinuation(Action action)
-        {
-            this.action = action;
-        }
-
-        public void Invoke()
-        {
-            action();
-        }
-    }
 }
 
 internal sealed class PlaybackPromise : PlaybackPromiseBase
