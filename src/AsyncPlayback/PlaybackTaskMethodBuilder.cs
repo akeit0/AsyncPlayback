@@ -298,7 +298,7 @@ internal sealed class PlaybackTaskMethodBuilderCore
                 "State machine runner is missing or has unexpected type."
             );
 
-        var record = playback.GetOrCreateCheckpointRecord(debugLabel);
+        var recordId = playback.GetOrCreateCheckpointRecordId(debugLabel);
 
         var resumeScope = PlaybackRuntime.CurrentRecordScopeIndex;
 
@@ -306,7 +306,7 @@ internal sealed class PlaybackTaskMethodBuilderCore
             ref stateMachine,
             PlaybackPromiseKind.Checkpoint,
             null,
-            record.FlatIndex,
+            playback.GetRecordIndex(recordId),
             resumeScope
         );
 

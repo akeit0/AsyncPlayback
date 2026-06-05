@@ -50,7 +50,7 @@ static async Task MoveBackwardAsync(Playback playback, string label)
 
 static async PlaybackTask CheckoutWorkflow(Playback playback)
 {
-    if (PlaybackTask.CurrentDirection == PlaybackDirection.Forward)
+    if (PlaybackTask.IsForward)
         PlaybackTask.Store(await CreateOrderAsync());
 
     await PlaybackTask.Checkpoint("order created");
@@ -61,7 +61,7 @@ static async PlaybackTask CheckoutWorkflow(Playback playback)
         return;
     }
 
-    if (PlaybackTask.CurrentDirection == PlaybackDirection.Forward)
+    if (PlaybackTask.IsForward)
         PlaybackTask.Store(await ReserveInventoryAsync(RequireState()));
 
     await PlaybackTask.Checkpoint("inventory reserved");
@@ -72,7 +72,7 @@ static async PlaybackTask CheckoutWorkflow(Playback playback)
         return;
     }
 
-    if (PlaybackTask.CurrentDirection == PlaybackDirection.Forward)
+    if (PlaybackTask.IsForward)
         PlaybackTask.Store(await ChargePaymentAsync(RequireState()));
 
     await PlaybackTask.Checkpoint("payment charged");
@@ -83,7 +83,7 @@ static async PlaybackTask CheckoutWorkflow(Playback playback)
         return;
     }
 
-    if (PlaybackTask.CurrentDirection == PlaybackDirection.Forward)
+    if (PlaybackTask.IsForward)
         Console.WriteLine("workflow: checkout is active");
 
     await PlaybackTask.Checkpoint("checkout active");
@@ -173,7 +173,7 @@ static async PlaybackTask CancelOrderAsync(CheckoutState state)
 static bool TryGetPaymentToRefund(out CheckoutState state)
 {
     if (
-        PlaybackTask.CurrentDirection == PlaybackDirection.Backward
+        PlaybackTask.IsBackward
         && PlaybackTask.TryGet<CheckoutState>(out var restored)
         && restored is { PaymentId: not null }
     )
@@ -190,7 +190,7 @@ static bool TryGetReservationToRelease(out CheckoutState state)
 {
     var playback = PlaybackTask.GetCurrentPlayback();
     if (
-        playback.CurrentDirection == PlaybackDirection.Backward
+        PlaybackTask.IsBackward
         && playback.TryGet<CheckoutState>(out var restored)
         && restored is { ReservationId: not null }
     )
@@ -206,10 +206,7 @@ static bool TryGetReservationToRelease(out CheckoutState state)
 static bool TryGetOrderToCancel(out CheckoutState state)
 {
     var playback = PlaybackTask.GetCurrentPlayback();
-    if (
-        playback.CurrentDirection == PlaybackDirection.Backward
-        && playback.TryGet<CheckoutState>(out var restored)
-    )
+    if (PlaybackTask.IsBackward && playback.TryGet<CheckoutState>(out var restored))
     {
         state = restored;
         return true;

@@ -3,6 +3,8 @@ namespace AsyncPlayback;
 public partial struct PlaybackTask
 {
     public static PlaybackDirection CurrentDirection => GetCurrentPlayback().CurrentDirection;
+    public static bool IsForward => CurrentDirection == PlaybackDirection.Forward;
+    public static bool IsBackward => CurrentDirection == PlaybackDirection.Backward;
 
     public static CheckpointAwaitable Checkpoint(string debugLabel = "Checkpoint") =>
         new(GetCurrentPlayback(), debugLabel);

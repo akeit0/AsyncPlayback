@@ -15,7 +15,7 @@ public enum TimelineRecordVisibility
     Infrastructure,
 }
 
-internal enum CheckpointRecordKind
+public enum CheckpointRecordKind
 {
     Entry,
     User,

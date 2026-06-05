@@ -84,7 +84,7 @@ can use `Store`, `TryGet`, and `ClearStore` for manual state restoration:
 ```cs
 static async PlaybackTask Scenario(Playback r)
 {
-    if (r.CurrentDirection == PlaybackDirection.Forward)
+    if (PlaybackTask.IsForward)
     {
         var receipt = await r.Effect(CreateOrderAsync, "create order");
         r.Store(receipt);
@@ -92,7 +92,7 @@ static async PlaybackTask Scenario(Playback r)
 
     await r.Checkpoint("order created");
 
-    if (r.CurrentDirection == PlaybackDirection.Backward &&
+    if (PlaybackTask.IsBackward &&
         r.TryGet<OrderReceipt>(out var receipt))
     {
         await r.Effect(() => CancelOrderAsync(receipt), "cancel order");

@@ -1,60 +1,15 @@
 namespace AsyncPlayback;
 
-public readonly struct TimelineRecordInfo
+internal struct TimelineRecord
 {
-    internal TimelineRecordInfo(
-        int id,
+    private TimelineRecord(
+        RecordId id,
         TimelineRecordKind kind,
         TimeSpan startTime,
         TimeSpan duration,
         string debugLabel,
-        int? parentId,
-        int depth,
-        TimelineRecordVisibility visibility,
-        long? timestamp,
-        TimeSpan? deltaTime
-    )
-    {
-        Id = id;
-        Kind = kind;
-        StartTime = startTime;
-        Duration = duration;
-        DebugLabel = debugLabel;
-        ParentId = parentId;
-        Depth = depth;
-        Visibility = visibility;
-        Timestamp = timestamp;
-        DeltaTime = deltaTime;
-    }
-
-    public int Id { get; }
-    public TimelineRecordKind Kind { get; }
-    public TimeSpan StartTime { get; }
-    public TimeSpan Duration { get; }
-    public TimeSpan EndTime => StartTime + Duration;
-    public string DebugLabel { get; }
-    public int? ParentId { get; }
-    public int Depth { get; }
-    public TimelineRecordVisibility Visibility { get; }
-    public long? Timestamp { get; }
-    public TimeSpan? DeltaTime { get; }
-
-    public override string ToString()
-    {
-        var indent = new string(' ', Depth * 2);
-        var parent = ParentId is { } id ? $" parent=#{id}" : "";
-        return $"{indent}#{Id} {Kind} {StartTime} - {EndTime}{parent}: {DebugLabel}";
-    }
-}
-
-internal abstract class TimelineRecord
-{
-    protected TimelineRecord(
-        int id,
-        TimelineRecordKind kind,
-        TimeSpan startTime,
-        TimeSpan duration,
-        string debugLabel
+        CheckpointRecordKind checkpointKind = default,
+        IRecordPayload? payload = null
     )
     {
         if (duration < TimeSpan.Zero)
@@ -68,21 +23,103 @@ internal abstract class TimelineRecord
         StartTime = startTime;
         Duration = duration;
         DebugLabel = string.IsNullOrWhiteSpace(debugLabel) ? kind.ToString() : debugLabel;
+        CheckpointKind = checkpointKind;
+        Payload = payload;
+        ParentIndex = null;
+        ParentId = null;
+        Depth = 0;
+        FlatIndex = 0;
+        OwnerRunner = null;
+        EntryCheckpoint = null;
     }
 
-    public int Id { get; }
+    public RecordId Id { get; }
     public TimelineRecordKind Kind { get; }
     public TimeSpan StartTime { get; }
-    public TimeSpan Duration { get; protected set; }
+    public TimeSpan Duration { get; set; }
     public TimeSpan EndTime => StartTime + Duration;
     public string DebugLabel { get; }
+    public CheckpointRecordKind CheckpointKind { get; }
+    public IRecordPayload? Payload { get; }
 
-    public int? ParentIndex { get; internal set; }
-    public int? ParentId { get; internal set; }
-    public int Depth { get; internal set; }
-    public int FlatIndex { get; internal set; }
-    public IPlaybackRunner? OwnerRunner { get; internal set; }
-    public TimelineCheckpoint? EntryCheckpoint { get; internal set; }
+    public int? ParentIndex { get; set; }
+    public RecordId? ParentId { get; set; }
+    public int Depth { get; set; }
+    public int FlatIndex { get; set; }
+    public IPlaybackRunner? OwnerRunner { get; set; }
+    public TimelineCheckpoint? EntryCheckpoint { get; set; }
+
+    public static TimelineRecord Checkpoint(
+        RecordId id,
+        TimeSpan time,
+        string debugLabel,
+        CheckpointRecordKind checkpointKind
+    )
+    {
+        return new(
+            id,
+            TimelineRecordKind.Checkpoint,
+            time,
+            TimeSpan.Zero,
+            debugLabel,
+            checkpointKind
+        );
+    }
+
+    public static TimelineRecord Delay(
+        RecordId id,
+        TimeSpan startTime,
+        TimeSpan duration,
+        string debugLabel
+    )
+    {
+        return new(id, TimelineRecordKind.Delay, startTime, duration, debugLabel);
+    }
+
+    public static TimelineRecord Effect(
+        RecordId id,
+        TimeSpan startTime,
+        string debugLabel,
+        Func<CancellationToken, ValueTask<object?>> executeAsync
+    )
+    {
+        return new(
+            id,
+            TimelineRecordKind.Effect,
+            startTime,
+            TimeSpan.Zero,
+            debugLabel,
+            payload: new EffectRecordPayload(executeAsync)
+        );
+    }
+
+    public static TimelineRecord SeekLoop(
+        RecordId id,
+        TimeSpan startTime,
+        TimeSpan duration,
+        string debugLabel
+    )
+    {
+        return new(id, TimelineRecordKind.SeekLoop, startTime, duration, debugLabel);
+    }
+
+    public static TimelineRecord Call(
+        RecordId id,
+        TimeSpan startTime,
+        string debugLabel,
+        IPlaybackRunner parentRunner,
+        IPlaybackRunner childRunner
+    )
+    {
+        return new(
+            id,
+            TimelineRecordKind.Call,
+            startTime,
+            TimeSpan.Zero,
+            debugLabel,
+            payload: new CallRecordPayload(parentRunner, childRunner)
+        );
+    }
 
     public bool Contains(TimeSpan time, bool includeEnd = true)
     {
@@ -102,6 +139,7 @@ internal abstract class TimelineRecord
             ParentId,
             Depth,
             GetVisibility(),
+            Kind == TimelineRecordKind.Checkpoint ? CheckpointKind : null,
             EntryCheckpoint?.Timestamp,
             EntryCheckpoint?.DeltaTime
         );
@@ -109,52 +147,35 @@ internal abstract class TimelineRecord
 
     private TimelineRecordVisibility GetVisibility()
     {
-        return this switch
-        {
-            CheckpointTimelineRecord checkpoint
-                when checkpoint.CheckpointKind != CheckpointRecordKind.User =>
-                TimelineRecordVisibility.Infrastructure,
-            _ => TimelineRecordVisibility.Workflow,
-        };
+        return Kind == TimelineRecordKind.Checkpoint && CheckpointKind != CheckpointRecordKind.User
+            ? TimelineRecordVisibility.Infrastructure
+            : TimelineRecordVisibility.Workflow;
     }
-}
 
-internal sealed class CheckpointTimelineRecord : TimelineRecord
-{
-    public CheckpointTimelineRecord(
-        int id,
-        TimeSpan time,
-        string debugLabel,
-        CheckpointRecordKind checkpointKind
-    )
-        : base(id, TimelineRecordKind.Checkpoint, time, TimeSpan.Zero, debugLabel)
+    public bool IsCheckpoint(CheckpointRecordKind kind)
     {
-        CheckpointKind = checkpointKind;
+        return Kind == TimelineRecordKind.Checkpoint && CheckpointKind == kind;
     }
 
-    public CheckpointRecordKind CheckpointKind { get; }
-}
+    public Func<CancellationToken, ValueTask<object?>> ExecuteAsync => EffectPayload.ExecuteAsync;
 
-internal sealed class DelayRecord : TimelineRecord
-{
-    public DelayRecord(int id, TimeSpan startTime, TimeSpan duration, string debugLabel)
-        : base(id, TimelineRecordKind.Delay, startTime, duration, debugLabel) { }
-}
-
-internal sealed class EffectRecord : TimelineRecord
-{
-    public EffectRecord(
-        int id,
-        TimeSpan startTime,
-        string debugLabel,
-        Func<CancellationToken, ValueTask<object?>> executeAsync
-    )
-        : base(id, TimelineRecordKind.Effect, startTime, TimeSpan.Zero, debugLabel)
+    public IPlaybackRunner ParentRunner
     {
-        ExecuteAsync = executeAsync ?? throw new ArgumentNullException(nameof(executeAsync));
+        get => CallPayload.ParentRunner;
+        set => CallPayload.ParentRunner = value;
     }
 
-    public Func<CancellationToken, ValueTask<object?>> ExecuteAsync { get; }
+    public IPlaybackRunner ChildRunner
+    {
+        get => CallPayload.ChildRunner;
+        set => CallPayload.ChildRunner = value;
+    }
+
+    public int ParentAwaitCheckpointId
+    {
+        get => CallPayload.ParentAwaitCheckpointId;
+        set => CallPayload.ParentAwaitCheckpointId = value;
+    }
 
     public void Complete(TimeSpan endTime)
     {
@@ -163,32 +184,6 @@ internal sealed class EffectRecord : TimelineRecord
 
         Duration = endTime - StartTime;
     }
-}
-
-internal sealed class SeekLoopRecord : TimelineRecord
-{
-    public SeekLoopRecord(int id, TimeSpan startTime, TimeSpan duration, string debugLabel)
-        : base(id, TimelineRecordKind.SeekLoop, startTime, duration, debugLabel) { }
-}
-
-internal sealed class CallTimelineRecord : TimelineRecord
-{
-    public CallTimelineRecord(
-        int id,
-        TimeSpan startTime,
-        string debugLabel,
-        IPlaybackRunner parentRunner,
-        IPlaybackRunner childRunner
-    )
-        : base(id, TimelineRecordKind.Call, startTime, TimeSpan.Zero, debugLabel)
-    {
-        ParentRunner = parentRunner;
-        ChildRunner = childRunner;
-    }
-
-    public IPlaybackRunner ParentRunner { get; private set; }
-    public IPlaybackRunner ChildRunner { get; private set; }
-    public int ParentAwaitCheckpointId { get; private set; }
 
     public void RebindRunners(IPlaybackRunner parentRunner, IPlaybackRunner childRunner)
     {
@@ -202,11 +197,25 @@ internal sealed class CallTimelineRecord : TimelineRecord
         ParentAwaitCheckpointId = checkpointId;
     }
 
-    public void Complete(TimeSpan endTime)
+    private EffectRecordPayload EffectPayload
     {
-        if (endTime < StartTime)
-            endTime = StartTime;
+        get
+        {
+            if (Kind != TimelineRecordKind.Effect || Payload is not EffectRecordPayload payload)
+                throw new InvalidOperationException("Record is not an effect.");
 
-        Duration = endTime - StartTime;
+            return payload;
+        }
+    }
+
+    private CallRecordPayload CallPayload
+    {
+        get
+        {
+            if (Kind != TimelineRecordKind.Call || Payload is not CallRecordPayload payload)
+                throw new InvalidOperationException("Record is not a call.");
+
+            return payload;
+        }
     }
 }

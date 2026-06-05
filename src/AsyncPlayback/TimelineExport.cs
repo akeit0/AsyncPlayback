@@ -186,7 +186,7 @@ public static class TimelineExportExtensions
     {
         var active = records
             .Where(record => IsActiveAt(record, time, includePoints))
-            .Select(static record => record.Id)
+            .Select(static record => record.Id.Value)
             .ToArray();
 
         return new TimelineSampleExport(FormatTime(time), time.Ticks, ToSeconds(time), active);
