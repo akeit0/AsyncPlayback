@@ -49,7 +49,7 @@ internal sealed class TimelineRecordRuntime
 
     public void ArmSeekLoopMoveNext(int recordIndex, PlaybackPromise<bool> promise)
     {
-        ref var state = ref GetOrCreateSeekLoopState(recordIndex);
+        ref var state = ref GetSeekLoopStateSlot(recordIndex);
         state.PendingMoveNext = promise ?? throw new ArgumentNullException(nameof(promise));
     }
 
@@ -60,7 +60,7 @@ internal sealed class TimelineRecordRuntime
         TimeSpan playbackTime
     )
     {
-        ref var state = ref GetOrCreateSeekLoopState(recordIndex);
+        ref var state = ref GetSeekLoopStateSlot(recordIndex);
         var promise = state.PendingMoveNext;
 
         if (promise is not { IsCompleted: false })
@@ -81,6 +81,32 @@ internal sealed class TimelineRecordRuntime
 
         state.PendingMoveNext = null;
         return promise.TrySetResult(true);
+    }
+
+    public void PrepareSeekLoopReplayAt(
+        int recordIndex,
+        TimeSpan recordStartTime,
+        TimeSpan recordDuration,
+        TimeSpan playbackTime
+    )
+    {
+        ref var state = ref GetSeekLoopStateSlot(recordIndex);
+        var elapsed = ClampElapsed(recordStartTime, recordDuration, playbackTime);
+        state.CurrentElapsed = elapsed;
+        state.ReplayTrueRemaining = 1;
+
+        if (elapsed == recordDuration)
+            state.FinalTrueDelivered = true;
+    }
+
+    public bool ConsumeReplaySeekLoopMoveNext(int recordIndex)
+    {
+        ref var state = ref GetSeekLoopStateSlot(recordIndex);
+        if (state.ReplayTrueRemaining <= 0)
+            return false;
+
+        state.ReplayTrueRemaining--;
+        return true;
     }
 
     public bool CompleteSeekLoopFalse(int recordIndex)
@@ -117,7 +143,7 @@ internal sealed class TimelineRecordRuntime
             seekLoops.RemoveRange(recordCount, seekLoops.Count - recordCount);
     }
 
-    private ref SeekLoopRuntimeState GetOrCreateSeekLoopState(int recordIndex)
+    private ref SeekLoopRuntimeState GetSeekLoopStateSlot(int recordIndex)
     {
         EnsureRecordIndex(recordIndex);
         return ref CollectionsMarshal.AsSpan(seekLoops)[recordIndex];
@@ -135,10 +161,28 @@ internal sealed class TimelineRecordRuntime
             seekLoops.Add(default);
     }
 
+    private static TimeSpan ClampElapsed(
+        TimeSpan recordStartTime,
+        TimeSpan recordDuration,
+        TimeSpan playbackTime
+    )
+    {
+        var elapsed = playbackTime - recordStartTime;
+
+        if (elapsed < TimeSpan.Zero)
+            return TimeSpan.Zero;
+
+        if (elapsed > recordDuration)
+            return recordDuration;
+
+        return elapsed;
+    }
+
     private struct SeekLoopRuntimeState
     {
         public PlaybackPromise<bool>? PendingMoveNext { get; set; }
         public TimeSpan CurrentElapsed { get; set; }
         public bool FinalTrueDelivered { get; set; }
+        public int ReplayTrueRemaining { get; set; }
     }
 }

@@ -207,6 +207,18 @@ internal sealed class PlaybackRunner<TStateMachine> : IPlaybackRunner
         }
     }
 
+    public int CaptureReplaySuspension(
+        ref TStateMachine stateMachine,
+        PlaybackPromiseKind awaitKind,
+        int ownerRecordIndex,
+        int? resumeScopeIndex
+    )
+    {
+        var checkpointId = CaptureCheckpointCore(ref stateMachine, resumeScopeIndex);
+        suspendedCheckpointId = checkpointId;
+        return checkpointId;
+    }
+
     public int CaptureCheckpoint(
         ref TStateMachine stateMachine,
         PlaybackPromiseKind awaitKind,
@@ -214,6 +226,22 @@ internal sealed class PlaybackRunner<TStateMachine> : IPlaybackRunner
         int? ownerRecordIndex,
         int? resumeScopeIndex
     )
+    {
+        var checkpointId = CaptureCheckpointCore(ref stateMachine, resumeScopeIndex);
+
+        playback.OnCheckpointCaptured(
+            this,
+            checkpointId,
+            awaitKind,
+            awaitedPromise,
+            ownerRecordIndex,
+            resumeScopeIndex
+        );
+
+        return checkpointId;
+    }
+
+    private int CaptureCheckpointCore(ref TStateMachine stateMachine, int? resumeScopeIndex)
     {
         var storedSnapshot = SnapshotStateMachine(stateMachine);
         var workingCopy = SnapshotStateMachine(storedSnapshot);
@@ -229,15 +257,6 @@ internal sealed class PlaybackRunner<TStateMachine> : IPlaybackRunner
         checkpoints[checkpointId - 1] = storedSnapshot;
         checkpointScopes[checkpointId - 1] = resumeScopeIndex;
         suspendedCheckpointId = checkpointId;
-
-        playback.OnCheckpointCaptured(
-            this,
-            checkpointId,
-            awaitKind,
-            awaitedPromise,
-            ownerRecordIndex,
-            resumeScopeIndex
-        );
 
         return checkpointId;
     }

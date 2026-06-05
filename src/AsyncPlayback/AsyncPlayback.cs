@@ -14,6 +14,12 @@ public enum PlaybackMoveMode
     Traverse,
 }
 
+internal enum PlaybackTransportSource
+{
+    Move,
+    Clock,
+}
+
 public readonly record struct TransportOptions(TransportEvaluation Evaluation, bool EvaluateTarget)
 {
     public static TransportOptions TargetOnly { get; } = new(TransportEvaluation.TargetOnly, true);
@@ -98,6 +104,7 @@ public sealed class Playback
     private PlaybackEdgeCursor edgeCursor;
     private CancellationToken currentCancellationToken;
     private PlaybackDirection currentDirection = PlaybackDirection.Forward;
+    private readonly HashSet<PlaybackEventBoundaryKey> emittedBoundaries = [];
 
     private IPlaybackRunner? rootRunner;
     private bool suppressImplicitCallContinuationBoundary;
@@ -119,6 +126,8 @@ public sealed class Playback
     public bool IsStarted { get; private set; }
 
     public bool IsCompleted { get; private set; }
+
+    public event Action<PlaybackEvent>? EventOccurred;
 
     public IReadOnlyList<TimelineRecordInfo> Records => GetRecordInfos();
     public TimelineRecordInfo? CurrentRecord =>
@@ -265,7 +274,10 @@ public sealed class Playback
     {
         var playback = this;
 
-        var record = playback.GetOrCreateDelayRecord(duration, debugLabel);
+        var record = playback.UseDelayRecord(duration, debugLabel);
+        if (IsReplayAwait(record))
+            return PlaybackTask.SuspendReplayAt(PlaybackPromiseKind.Delay, record.FlatIndex);
+
         var promise = new PlaybackPromise(playback, PlaybackPromiseKind.Delay)
         {
             StartTime = record.StartTime,
@@ -291,7 +303,28 @@ public sealed class Playback
     }
 
     public PlaybackTask Effect(
+        Func<ValueTask> effect,
+        Func<ValueTask>? revert,
+        string debugLabel = "Effect"
+    )
+    {
+        if (effect == null)
+            throw new ArgumentNullException(nameof(effect));
+
+        return Effect(_ => effect(), revert == null ? null : _ => revert(), debugLabel);
+    }
+
+    public PlaybackTask Effect(
         Func<CancellationToken, ValueTask> effect,
+        string debugLabel = "Effect"
+    )
+    {
+        return Effect(effect, revert: null, debugLabel);
+    }
+
+    public PlaybackTask Effect(
+        Func<CancellationToken, ValueTask> effect,
+        Func<CancellationToken, ValueTask>? revert,
         string debugLabel = "Effect"
     )
     {
@@ -300,7 +333,7 @@ public sealed class Playback
 
         EnsureCurrentPlayback();
 
-        var record = GetOrCreateEffectRecord(
+        var record = UseEffectRecord(
             debugLabel,
             async cancellationToken =>
             {
@@ -308,6 +341,18 @@ public sealed class Playback
                 return null;
             }
         );
+
+        if (currentDirection == PlaybackDirection.Backward)
+        {
+            if (revert != null)
+            {
+                var revertFailure = StartReplayRevertEffect(revert);
+                if (revertFailure != null)
+                    return PlaybackTask.FromException(revertFailure);
+            }
+
+            return PlaybackTask.SuspendReplayAt(PlaybackPromiseKind.Effect, record.FlatIndex);
+        }
 
         var promise = new PlaybackPromise(this, PlaybackPromiseKind.Effect)
         {
@@ -339,10 +384,23 @@ public sealed class Playback
 
         EnsureCurrentPlayback();
 
-        var record = GetOrCreateEffectRecord(
+        var record = UseEffectRecord(
             debugLabel,
             async cancellationToken => await effect(cancellationToken).ConfigureAwait(false)
         );
+
+        if (currentDirection == PlaybackDirection.Backward)
+            return PlaybackTask<T>.SuspendReplayAt(PlaybackPromiseKind.Effect, record.FlatIndex);
+
+        if (IsReplayAwait(record))
+        {
+            if (!record.TryGetEffectResult(out var result))
+                throw new InvalidOperationException(
+                    $"Effect record '{record.DebugLabel}' has no recorded result."
+                );
+
+            return PlaybackTask<T>.FromResult((T)result!);
+        }
 
         var promise = new PlaybackPromise<T>(this, PlaybackPromiseKind.Effect)
         {
@@ -360,7 +418,7 @@ public sealed class Playback
     {
         EnsureCurrentPlayback();
 
-        var record = GetOrCreateSeekLoopRecord(duration, debugLabel);
+        var record = UseSeekLoopRecord(duration, debugLabel);
         return new(this, record.FlatIndex);
     }
 
@@ -387,8 +445,14 @@ public sealed class Playback
             && !suppressExit;
 
         var ownerRecord = isExitMoveNext
-            ? GetOrCreateImplicitCheckpointRecord($"exit {record.DebugLabel}")
+            ? UseImplicitCheckpointRecord($"exit {record.DebugLabel}")
             : (TimelineRecord)record;
+
+        if (currentDirection == PlaybackDirection.Backward)
+            return PlaybackTask<bool>.SuspendReplayAt(
+                PlaybackPromiseKind.SeekLoopMoveNext,
+                ownerRecord.FlatIndex
+            );
 
         var promise = new PlaybackPromise<bool>(this, PlaybackPromiseKind.SeekLoopMoveNext)
         {
@@ -493,7 +557,13 @@ public sealed class Playback
             : virtualDelta > TimeSpan.Zero ? PlaybackDirection.Forward
             : (PlaybackDirection?)null;
 
-        return TransportToAsync(target, options, direction, cancellationToken);
+        return TransportToAsync(
+            target,
+            options,
+            direction,
+            PlaybackTransportSource.Move,
+            cancellationToken
+        );
     }
 
     public ValueTask AdvanceByElapsedTimeAsync(CancellationToken cancellationToken = default)
@@ -508,7 +578,18 @@ public sealed class Playback
     {
         SampleTimestamp();
         using var timestampScope = SuppressAwaitPointTimestampSampling();
-        await MoveByAsync(DeltaTime, options, cancellationToken).ConfigureAwait(false);
+        var target = Time + DeltaTime;
+
+        await TransportToAsync(
+                target,
+                options,
+                DeltaTime > TimeSpan.Zero ? PlaybackDirection.Forward
+                    : DeltaTime < TimeSpan.Zero ? PlaybackDirection.Backward
+                    : null,
+                PlaybackTransportSource.Clock,
+                cancellationToken
+            )
+            .ConfigureAwait(false);
     }
 
     public ValueTask RewindByElapsedTimeAsync(CancellationToken cancellationToken = default)
@@ -538,6 +619,7 @@ public sealed class Playback
             targetTime,
             new(ToTransportEvaluation(mode), evaluateTarget),
             direction,
+            PlaybackTransportSource.Move,
             cancellationToken
         );
     }
@@ -652,6 +734,7 @@ public sealed class Playback
     )
     {
         EnsureStarted();
+        ResetBoundaryEventDeduplication();
         currentDirection = direction;
         using var cancellationScope = PushCancellationToken(cancellationToken);
 
@@ -813,7 +896,10 @@ public sealed class Playback
                     continue;
 
                 if (position != null)
+                {
                     boundaryCursor = new(direction, position.Value);
+                    EmitBoundaryReached(position.Value);
+                }
 
                 return new(true, position);
             }
@@ -993,7 +1079,7 @@ public sealed class Playback
         SetEntryCheckpoint(record.Id, checkpoint);
     }
 
-    internal RecordId GetOrCreateCheckpointRecordId(string debugLabel)
+    internal RecordId UseCheckpointRecordId(string debugLabel)
     {
         EnsureCurrentPlayback();
 
@@ -1021,7 +1107,7 @@ public sealed class Playback
         return AddRecord(record).Id;
     }
 
-    private TimelineRecord GetOrCreateImplicitCheckpointRecord(string debugLabel)
+    private TimelineRecord UseImplicitCheckpointRecord(string debugLabel)
     {
         debugLabel = string.IsNullOrWhiteSpace(debugLabel) ? "ImplicitCheckpoint" : debugLabel;
 
@@ -1049,7 +1135,7 @@ public sealed class Playback
 
     private void CreateOrUpdateImplicitCallContinuationCheckpoint(TimelineRecord call)
     {
-        var boundary = GetOrCreateImplicitCheckpointRecord($"after {call.DebugLabel}");
+        var boundary = UseImplicitCheckpointRecord($"after {call.DebugLabel}");
         var parent = call.ParentRunner;
         var checkpointId = call.ParentAwaitCheckpointId;
         var resumeScope = parent.GetResumeScope(checkpointId);
@@ -1071,7 +1157,7 @@ public sealed class Playback
         SetEntryCheckpoint(boundary.Id, checkpoint);
     }
 
-    internal TimelineRecord GetOrCreateCallRecord(
+    internal TimelineRecord UseCallRecord(
         IPlaybackRunner parentRunner,
         IPlaybackRunner childRunner,
         string debugLabel
@@ -1156,7 +1242,11 @@ public sealed class Playback
             call.Complete(Time);
             records[callRecordIndex] = call;
 
-            if (!suppressImplicitCallContinuationBoundary && call.ParentAwaitCheckpointId != 0)
+            if (
+                currentDirection != PlaybackDirection.Backward
+                && !suppressImplicitCallContinuationBoundary
+                && call.ParentAwaitCheckpointId != 0
+            )
                 CreateOrUpdateImplicitCallContinuationCheckpoint(call);
 
             SetCurrentRecord(call.Id);
@@ -1180,9 +1270,16 @@ public sealed class Playback
     private void SetEntryCheckpoint(RecordId recordId, TimelineCheckpoint checkpoint)
     {
         ref var target = ref GetRecordRef(GetRecordIndex(recordId));
+        var hadEntryCheckpoint = target.EntryCheckpoint != null;
         target.EntryCheckpoint = checkpoint;
         stateStore.SetEntrySnapshot(target.FlatIndex, CaptureStoreSnapshot());
         stateStore.Bind(checkpoint, target.FlatIndex);
+        if (target.Kind == TimelineRecordKind.Checkpoint && !hadEntryCheckpoint)
+            EmitPlaybackEvent(
+                PlaybackEventKind.CheckpointAdded,
+                target.Id,
+                PlaybackBoundaryKind.Point
+            );
     }
 
     internal void OnRunnerFaulted(IPlaybackRunner runner, Exception exception)
@@ -1216,10 +1313,12 @@ public sealed class Playback
         TimeSpan targetTime,
         TransportOptions options,
         PlaybackDirection? directionOverride,
+        PlaybackTransportSource source,
         CancellationToken cancellationToken
     )
     {
         EnsureStarted();
+        ResetBoundaryEventDeduplication();
         using var cancellationScope = PushCancellationToken(cancellationToken);
 
         boundaryCursor = null;
@@ -1229,6 +1328,9 @@ public sealed class Playback
                 nameof(targetTime),
                 "Target time must be non-negative."
             );
+
+        if (IsFutureTargetBanned(targetTime, source))
+            throw new InvalidOperationException("Cannot move beyond the recorded timeline.");
 
         if (directionOverride == null && targetTime == Time)
         {
@@ -1602,6 +1704,7 @@ public sealed class Playback
 
             MoveTimeTo(boundary.Time);
             SetCurrentRecord(record.Id);
+            EmitBoundaryReached(record.Id, boundary.Kind, boundary.Time);
             return;
         }
 
@@ -1832,9 +1935,11 @@ public sealed class Playback
         MoveTimeTo(targetTime);
 
         recordRuntime.CompleteDelay(delay.FlatIndex);
-        await RunReadyAsync(currentCancellationToken).ConfigureAwait(false);
-
         SetCurrentRecord(delay.Id);
+        EmitBoundaryReached(delay.Id, ToBoundaryKind(delay, targetTime), targetTime);
+
+        await RunReadyAsync(currentCancellationToken).ConfigureAwait(false);
+        EmitCurrentBoundaryReachedAt(targetTime);
     }
 
     private async ValueTask EmitEffectAtAsync(TimelineRecord effect, PlaybackDirection direction)
@@ -1846,12 +1951,14 @@ public sealed class Playback
             SetCurrentRecord(effect.Id);
             Mode = PlaybackMode.Playback;
             playbackRecordIndex = Math.Min(effect.FlatIndex + 1, records.Count);
+            EmitBoundaryReached(effect.Id, TimelineBoundaryKind.Start, effect.StartTime);
             return;
         }
 
         RestoreToRecord(effect.Id);
         await RunReadyAsync(currentCancellationToken).ConfigureAwait(false);
         SetCurrentRecord(effect.Id);
+        EmitBoundaryReached(effect.Id, TimelineBoundaryKind.Start, effect.StartTime);
     }
 
     private async ValueTask EmitSeekLoopAtAsync(
@@ -1876,6 +1983,7 @@ public sealed class Playback
         await RunReadyAsync(currentCancellationToken).ConfigureAwait(false);
 
         SetCurrentRecord(loop.Id);
+        EmitBoundaryReached(loop.Id, ToBoundaryKind(loop, targetTime), targetTime);
     }
 
     private async ValueTask EmitCheckpointAsync(
@@ -1917,6 +2025,7 @@ public sealed class Playback
         }
 
         SetCurrentRecord(checkpoint.Id);
+        EmitBoundaryReached(checkpoint.Id, TimelineBoundaryKind.Point, checkpoint.StartTime);
     }
 
     private bool HasActiveSeekLoop(TimelineRecord loop)
@@ -1931,7 +2040,135 @@ public sealed class Playback
         return false;
     }
 
-    private TimelineRecord GetOrCreateEffectRecord(
+    private void EmitBoundaryReached(
+        RecordId recordId,
+        TimelineBoundaryKind? boundaryKind,
+        TimeSpan eventTime
+    )
+    {
+        if (boundaryKind == null)
+            return;
+
+        var publicBoundaryKind = ToPublicBoundaryKind(boundaryKind.Value);
+        if (!emittedBoundaries.Add(new(recordId, publicBoundaryKind, currentDirection, eventTime)))
+            return;
+
+        EmitPlaybackEvent(
+            PlaybackEventKind.BoundaryReached,
+            recordId,
+            publicBoundaryKind,
+            eventTime
+        );
+    }
+
+    private void EmitBoundaryReached(TimelineBoundary boundary)
+    {
+        EmitBoundaryReached(GetRecord(boundary.RecordIndex).Id, boundary.Kind, boundary.Time);
+    }
+
+    private void EmitTimedRecordStart(TimelineRecord record)
+    {
+        if (
+            record.Kind
+            is TimelineRecordKind.Delay
+                or TimelineRecordKind.Effect
+                or TimelineRecordKind.SeekLoop
+        )
+            EmitBoundaryReached(record.Id, TimelineBoundaryKind.Start, record.StartTime);
+    }
+
+    private void EmitCurrentBoundaryReachedAt(TimeSpan time)
+    {
+        if (GetCurrentBoundaryPosition() is { } boundary && boundary.Time == time)
+            EmitBoundaryReached(boundary);
+    }
+
+    private void EmitPlaybackEvent(
+        PlaybackEventKind kind,
+        RecordId recordId,
+        PlaybackBoundaryKind? boundaryKind = null,
+        TimeSpan? eventTime = null
+    )
+    {
+        var handler = EventOccurred;
+        if (handler == null)
+            return;
+
+        var record = GetRecord(recordId).ToInfo();
+        handler(
+            new(
+                kind,
+                record,
+                boundaryKind,
+                currentDirection,
+                eventTime ?? Time,
+                Timestamp,
+                DeltaTime,
+                record.DebugLabel
+            )
+        );
+    }
+
+    private void ResetBoundaryEventDeduplication()
+    {
+        emittedBoundaries.Clear();
+    }
+
+    private static TimelineBoundaryKind? ToBoundaryKind(TimelineRecord record, TimeSpan time)
+    {
+        if (time == record.StartTime)
+            return TimelineBoundaryKind.Start;
+
+        if (record.Duration > TimeSpan.Zero && time == record.EndTime)
+            return TimelineBoundaryKind.End;
+
+        return null;
+    }
+
+    private bool IsReplayAwait(TimelineRecord record)
+    {
+        return currentDirection == PlaybackDirection.Backward;
+    }
+
+    private Exception? StartReplayRevertEffect(Func<CancellationToken, ValueTask> revert)
+    {
+        var cancellationToken = currentCancellationToken;
+
+        ValueTask task;
+        try
+        {
+            task = revert(cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            return exception;
+        }
+
+        if (task.IsCompletedSuccessfully)
+        {
+            task.GetAwaiter().GetResult();
+            return null;
+        }
+
+        scheduler.BeginExternalEffect();
+        _ = CompleteReplayRevertEffectAsync(task);
+        return null;
+    }
+
+    private async Task CompleteReplayRevertEffectAsync(ValueTask task)
+    {
+        try
+        {
+            await task.ConfigureAwait(false);
+        }
+        catch { }
+        finally
+        {
+            scheduler.EndExternalEffect();
+        }
+    }
+
+    private TimelineRecord UseEffectRecord(
         string debugLabel,
         Func<CancellationToken, ValueTask<object?>> executeAsync
     )
@@ -1952,7 +2189,7 @@ public sealed class Playback
         return AddRecord(record);
     }
 
-    private TimelineRecord GetOrCreateDelayRecord(TimeSpan duration, string debugLabel)
+    private TimelineRecord UseDelayRecord(TimeSpan duration, string debugLabel)
     {
         if (duration < TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(
@@ -1976,7 +2213,7 @@ public sealed class Playback
         return AddRecord(record);
     }
 
-    private TimelineRecord GetOrCreateSeekLoopRecord(TimeSpan duration, string debugLabel)
+    private TimelineRecord UseSeekLoopRecord(TimeSpan duration, string debugLabel)
     {
         if (duration < TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(
@@ -2032,6 +2269,8 @@ public sealed class Playback
 
         SetCurrentRecord(record.Id);
         playbackRecordIndex = records.Count;
+        EmitPlaybackEvent(PlaybackEventKind.RecordAdded, record.Id);
+        EmitTimedRecordStart(record);
         return record;
     }
 
@@ -2073,6 +2312,7 @@ public sealed class Playback
 
         playbackRecordIndex++;
         SetCurrentRecord(delay.Id);
+        EmitTimedRecordStart(delay);
         return delay;
     }
 
@@ -2090,6 +2330,7 @@ public sealed class Playback
 
         playbackRecordIndex++;
         SetCurrentRecord(effect.Id);
+        EmitTimedRecordStart(effect);
         return effect;
     }
 
@@ -2107,6 +2348,7 @@ public sealed class Playback
 
         playbackRecordIndex++;
         SetCurrentRecord(loop.Id);
+        EmitTimedRecordStart(loop);
         return loop;
     }
 
@@ -2134,10 +2376,42 @@ public sealed class Playback
         return call;
     }
 
+    private bool IsFutureTargetBanned(TimeSpan targetTime, PlaybackTransportSource source)
+    {
+        if (records.Count == 0)
+            return false;
+
+        if (targetTime <= GetRecordedEndTime())
+            return false;
+
+        if (source == PlaybackTransportSource.Clock && !IsCompleted)
+            return false;
+
+        return Mode == PlaybackMode.Playback
+            || IsCompleted
+            || edgeCursor == PlaybackEdgeCursor.AfterLast;
+    }
+
+    private TimeSpan GetRecordedEndTime()
+    {
+        var end = TimeSpan.Zero;
+
+        foreach (var record in records)
+            if (record.EndTime > end)
+                end = record.EndTime;
+
+        return end;
+    }
+
     private void SwitchToRecordingFromPlaybackCursor()
     {
         if (Mode == PlaybackMode.Recording)
             return;
+
+        if (currentDirection == PlaybackDirection.Backward)
+            throw new InvalidOperationException(
+                "Backward replay cannot record a new timeline branch."
+            );
 
         TruncateRecordsFrom(playbackRecordIndex);
         Mode = PlaybackMode.Recording;
@@ -2392,6 +2666,8 @@ public sealed class Playback
     )
     {
         CompleteEffectRecord(recordId, promise, startTimestamp, endTimestamp, direction);
+        ref var record = ref GetRecordRef(GetRecordIndex(recordId));
+        record.SetEffectResult(result);
         promise.TrySetObjectResult(result);
     }
 
@@ -2589,6 +2865,13 @@ public sealed class Playback
                             "Effect checkpoint has no effect record."
                         );
 
+                if (currentDirection == PlaybackDirection.Backward)
+                {
+                    effect.TryGetEffectResult(out var result);
+                    promise.TrySetObjectResult(result);
+                    break;
+                }
+
                 StartEffect(effect.Id, promise);
                 break;
             }
@@ -2753,6 +3036,13 @@ public sealed class Playback
     private readonly record struct BoundaryCursor(
         PlaybackDirection Direction,
         TimelineBoundary Boundary
+    );
+
+    private readonly record struct PlaybackEventBoundaryKey(
+        RecordId RecordId,
+        PlaybackBoundaryKind BoundaryKind,
+        PlaybackDirection Direction,
+        TimeSpan Time
     );
 
     private sealed record PostedCheckpointResume(

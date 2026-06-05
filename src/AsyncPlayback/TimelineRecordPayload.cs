@@ -10,6 +10,8 @@ internal sealed class EffectRecordPayload : IRecordPayload
     }
 
     public Func<CancellationToken, ValueTask<object?>> ExecuteAsync { get; }
+    public object? Result { get; set; }
+    public bool HasResult { get; set; }
 }
 
 internal sealed class CallRecordPayload : IRecordPayload

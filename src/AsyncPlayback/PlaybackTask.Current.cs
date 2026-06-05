@@ -17,6 +17,18 @@ public partial struct PlaybackTask
         string debugLabel = "Effect"
     ) => GetCurrentPlayback().Effect(effect, debugLabel);
 
+    public static PlaybackTask Effect(
+        Func<ValueTask> effect,
+        Func<ValueTask>? revert,
+        string debugLabel = "Effect"
+    ) => GetCurrentPlayback().Effect(effect, revert, debugLabel);
+
+    public static PlaybackTask Effect(
+        Func<CancellationToken, ValueTask> effect,
+        Func<CancellationToken, ValueTask>? revert,
+        string debugLabel = "Effect"
+    ) => GetCurrentPlayback().Effect(effect, revert, debugLabel);
+
     public static PlaybackTask<T> Effect<T>(
         Func<CancellationToken, ValueTask<T>> effect,
         string debugLabel = "Effect"

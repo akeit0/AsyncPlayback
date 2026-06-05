@@ -38,6 +38,22 @@ var window = new Window()
             )
     );
 playback = Playback.Start(SimulateWork);
+playback.EventOccurred += (e) =>
+{
+    if (e.Record.Visibility == TimelineRecordVisibility.Infrastructure)
+        return;
+    if (
+        e.IsRecordAdded
+        || (
+            e.BoundaryKind == PlaybackBoundaryKind.Point
+            && e.Record.Kind == TimelineRecordKind.SeekLoop
+        )
+    )
+        return;
+    Console.WriteLine(
+        $"Event : {e.Record.Kind}:{e.BoundaryKind}:{e.DebugLabel}:{e.Time.TotalSeconds:F1}s"
+    );
+};
 Application.Run(window);
 
 async void Run(Playback playback)
@@ -88,7 +104,7 @@ async void SyncSlider(Playback playback, double value)
 async PlaybackTask SimulateWork(Playback playback)
 {
     var initialText = label.Text;
-    await Checkpoint();
+    await Checkpoint("start work");
     label.Text = CurrentDirection == PlaybackDirection.Forward ? "Running" : initialText;
     await Delay(TimeSpan.FromSeconds(1));
 

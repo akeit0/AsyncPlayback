@@ -206,7 +206,7 @@ internal sealed class PlaybackTaskMethodBuilderCore
         }
         else
         {
-            var call = playback.GetOrCreateCallRecord(parentRunner, runner, stateMachineName);
+            var call = playback.UseCallRecord(parentRunner, runner, stateMachineName);
 
             runner.BindCurrentCallRecord(call.FlatIndex);
 
@@ -244,6 +244,12 @@ internal sealed class PlaybackTaskMethodBuilderCore
         where TStateMachine : IAsyncStateMachine
     {
         var awaitedPromise = awaiter.Promise;
+        if (awaiter.IsReplaySuspension)
+        {
+            CaptureReplaySuspension(awaiter, ref stateMachine);
+            return;
+        }
+
         if (awaitedPromise == null)
         {
             var debugLabel = awaiter.DebugLabel ?? "Checkpoint";
@@ -282,6 +288,30 @@ internal sealed class PlaybackTaskMethodBuilderCore
         );
     }
 
+    private void CaptureReplaySuspension<TAwaiter, TStateMachine>(
+        TAwaiter awaiter,
+        ref TStateMachine stateMachine
+    )
+        where TAwaiter : IPlaybackAwaiter
+        where TStateMachine : IAsyncStateMachine
+    {
+        var typedRunner = runner as PlaybackRunner<TStateMachine>;
+        if (typedRunner == null)
+            throw new InvalidOperationException(
+                "State machine runner is missing or has unexpected type."
+            );
+
+        var resumeScope =
+            PlaybackRuntime.CurrentRecordScopeIndex ?? typedRunner.CurrentCallRecordIndex;
+
+        typedRunner.CaptureReplaySuspension(
+            ref stateMachine,
+            awaiter.ReplayAwaitKind,
+            awaiter.ReplayOwnerRecordIndex,
+            resumeScope
+        );
+    }
+
     private void CaptureCheckpointAwaiter<TStateMachine>(
         Playback awaiterplayback,
         string debugLabel,
@@ -298,7 +328,7 @@ internal sealed class PlaybackTaskMethodBuilderCore
                 "State machine runner is missing or has unexpected type."
             );
 
-        var recordId = playback.GetOrCreateCheckpointRecordId(debugLabel);
+        var recordId = playback.UseCheckpointRecordId(debugLabel);
 
         var resumeScope = PlaybackRuntime.CurrentRecordScopeIndex;
 

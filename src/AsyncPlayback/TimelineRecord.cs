@@ -159,6 +159,20 @@ internal struct TimelineRecord
 
     public Func<CancellationToken, ValueTask<object?>> ExecuteAsync => EffectPayload.ExecuteAsync;
 
+    public bool TryGetEffectResult(out object? result)
+    {
+        var payload = EffectPayload;
+        result = payload.Result;
+        return payload.HasResult;
+    }
+
+    public void SetEffectResult(object? result)
+    {
+        var payload = EffectPayload;
+        payload.Result = result;
+        payload.HasResult = true;
+    }
+
     public IPlaybackRunner ParentRunner
     {
         get => CallPayload.ParentRunner;
