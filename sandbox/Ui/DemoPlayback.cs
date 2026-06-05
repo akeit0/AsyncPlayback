@@ -1,4 +1,5 @@
 using AsyncPlayback;
+using Microsoft.Extensions.Logging;
 using static AsyncPlayback.PlaybackTask;
 
 namespace Ui;
@@ -9,18 +10,17 @@ internal partial record MainModel
 
     private async PlaybackTask SimulateWork(Playback playback)
     {
-        var initialText = labelText;
-
+        var currentText = labelText;
         await Checkpoint("start work");
-        SetLabelText(IsForward ? "Running" : initialText);
+        SetLabelText(IsForward ? "Running" : currentText);
 
         await Delay(TimeSpan.FromSeconds(0.7));
 
         await foreach (var progress in ForEachOnSeek(TimeSpan.FromSeconds(1)))
             SetRectWidth(DemoRectMaxWidth * progress.Progress);
-
+        currentText = labelText;
         await Delay(TimeSpan.FromSeconds(0.3));
-        SetLabelText(SelectByDirection(backwardStore: labelText, forward: "Done!"));
+        SetLabelText(IsForward ? "Done!" : currentText);
     }
 
     private void SetLabelText(string text)

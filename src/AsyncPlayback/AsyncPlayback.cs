@@ -104,6 +104,7 @@ public sealed class Playback
     private PlaybackEdgeCursor edgeCursor;
     private CancellationToken currentCancellationToken;
     private PlaybackDirection currentDirection = PlaybackDirection.Forward;
+    private TimeSpan transportStartTime;
     private readonly HashSet<PlaybackEventBoundaryKey> emittedBoundaries = [];
 
     private IPlaybackRunner? rootRunner;
@@ -992,6 +993,32 @@ public sealed class Playback
         return null;
     }
 
+    private async ValueTask<bool> TryEvaluatePendingBackwardDelayAtCurrentTimeAsync()
+    {
+        TimelineRecord? best = null;
+
+        foreach (var record in records)
+        {
+            if (
+                record.Kind != TimelineRecordKind.Delay
+                || record.Duration <= TimeSpan.Zero
+                || record.StartTime != Time
+                || transportStartTime < record.EndTime
+            )
+                continue;
+
+            if (best == null || record.FlatIndex > best.Value.FlatIndex)
+                best = record;
+        }
+
+        if (best == null)
+            return false;
+
+        await EvaluateRecordAsync(best.Value, Time, PlaybackDirection.Backward)
+            .ConfigureAwait(false);
+        return true;
+    }
+
     internal void Post<TState>(TState state, Action<TState> action)
         where TState : class
     {
@@ -1337,6 +1364,7 @@ public sealed class Playback
         }
 
         var direction = directionOverride ?? InferTransportDirection(targetTime);
+        transportStartTime = Time;
 
         if (directionOverride != null)
         {
@@ -1383,6 +1411,8 @@ public sealed class Playback
         {
             await RunReadyAsync(cancellationToken).ConfigureAwait(false);
             edgeEvaluated = await TryEvaluateTerminalBackwardEdgeAsync().ConfigureAwait(false);
+            if (edgeEvaluated && targetTime < Time)
+                await TryEvaluatePendingBackwardDelayAtCurrentTimeAsync().ConfigureAwait(false);
         }
 
         TargetTime = targetTime;
@@ -1865,7 +1895,7 @@ public sealed class Playback
             switch (record.Kind)
             {
                 case TimelineRecordKind.Delay:
-                    if (record.EndTime == time)
+                    if (IsEvaluatableDelayAt(record, time, direction))
                         result.Add(record);
                     break;
 
@@ -1899,6 +1929,41 @@ public sealed class Playback
             result.Sort(static (a, b) => b.FlatIndex.CompareTo(a.FlatIndex));
 
         return result;
+    }
+
+    private bool IsEvaluatableDelayAt(
+        TimelineRecord record,
+        TimeSpan time,
+        PlaybackDirection direction
+    )
+    {
+        if (record.EndTime == time)
+            return true;
+
+        if (
+            direction != PlaybackDirection.Backward
+            || record.Duration <= TimeSpan.Zero
+            || transportStartTime < record.EndTime
+            || !HasSeekLoopEndingAt(record.StartTime, record.FlatIndex)
+        )
+            return false;
+
+        return record.StartTime <= time && time < record.EndTime;
+    }
+
+    private bool HasSeekLoopEndingAt(TimeSpan time, int beforeRecordIndex)
+    {
+        for (var i = Math.Min(beforeRecordIndex - 1, records.Count - 1); i >= 0; i--)
+        {
+            var record = records[i];
+            if (record.StartTime < time && record.EndTime < time)
+                break;
+
+            if (record.Kind == TimelineRecordKind.SeekLoop && record.EndTime == time)
+                return true;
+        }
+
+        return false;
     }
 
     private ValueTask EvaluateRecordAsync(

@@ -2,7 +2,12 @@ using AsyncPlayback;
 
 namespace Ui;
 
-internal sealed record PlaybackEventItem(double TimeSeconds, string Text, string Tooltip, Brush Brush)
+internal sealed record PlaybackEventItem(
+    double TimeSeconds,
+    string Message,
+    string Tooltip,
+    Brush Brush
+)
 {
     public static PlaybackEventItem FromEvent(PlaybackEvent e)
     {

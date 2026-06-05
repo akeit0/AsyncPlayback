@@ -20,6 +20,8 @@
       <uap:VisualElements
         DisplayName="AsyncPlayback Timeline"
         Description="AsyncPlayback Timeline"
+        Square44x44Logo="Assets\icon.png"
+        Square150x150Logo="Assets\icon.png"
         BackgroundColor="transparent" />
     </Application>
   </Applications>

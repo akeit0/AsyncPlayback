@@ -63,13 +63,7 @@ internal partial record PlaybackUiState(
         var item = PlaybackEventItem.FromEvent(e);
         var events = Events.Concat([item]).TakeLast(160).ToArray();
 
-        return FromPlayback(
-            playback,
-            isRunning,
-            LabelText,
-            RectWidth,
-            events
-        );
+        return FromPlayback(playback, isRunning, LabelText, RectWidth, events);
     }
 
     private static IReadOnlyList<PlaybackEventItem> CutEventsAt(

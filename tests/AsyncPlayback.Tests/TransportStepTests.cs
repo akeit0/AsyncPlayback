@@ -480,6 +480,36 @@ public sealed class TransportStepTests
     }
 
     [Test]
+    public async Task BackwardTargetInsideTrailingDelayReplaysContinuationBackward()
+    {
+        var events = new List<string>();
+        var playback = Playback.Start(r => TrailingDelayScenario(r, events));
+
+        await playback.RunToEndAsync();
+        events.Clear();
+
+        await playback.MoveToAsync(TimeSpan.FromMilliseconds(1800));
+        await playback.MoveToAsync(TimeSpan.FromMilliseconds(1750));
+        await playback.MoveToAsync(TimeSpan.FromMilliseconds(1725));
+
+        await Assert.That(Joined(events)).IsEqualTo("completed:Backward");
+    }
+
+    [Test]
+    public async Task BackwardTargetInsideSeekLoopAcrossTrailingDelayReplaysContinuationBackward()
+    {
+        var events = new List<string>();
+        var playback = Playback.Start(r => TrailingDelayScenario(r, events));
+
+        await playback.RunToEndAsync();
+        events.Clear();
+
+        await playback.MoveToAsync(TimeSpan.FromMilliseconds(1200));
+
+        await Assert.That(Joined(events)).IsEqualTo("completed:Backward");
+    }
+
+    [Test]
     public async Task SelectByDirection_ForwardSamplesInsideSeekLoopDoNotReplayTerminal()
     {
         var events = new List<string>();
@@ -1606,6 +1636,16 @@ public sealed class TransportStepTests
 
         text = playback.SelectByDirection(backwardStore: text, forward: "Done!");
         events.Add("selected:" + text);
+    }
+
+    private static async PlaybackTask TrailingDelayScenario(Playback playback, List<string> events)
+    {
+        await PlaybackTask.Delay(TimeSpan.FromMilliseconds(700));
+
+        await foreach (var _ in playback.ForEachOnSeek(TimeSpan.FromSeconds(1))) { }
+
+        await PlaybackTask.Delay(TimeSpan.FromMilliseconds(300));
+        events.Add($"completed:{playback.CurrentDirection}");
     }
 
     private static async PlaybackTask ExternalLabelSelectSeekLoopScenario(

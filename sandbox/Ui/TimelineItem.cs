@@ -44,7 +44,10 @@ internal sealed record TimelineItem(
             2.0,
             Math.Max(
                 currentTime.TotalSeconds,
-                visibleRecords.Select(r => Min(r.EndTime, currentTime).TotalSeconds).DefaultIfEmpty(2).Max()
+                visibleRecords
+                    .Select(r => Min(r.EndTime, currentTime).TotalSeconds)
+                    .DefaultIfEmpty(2)
+                    .Max()
             )
         );
         var contentWidth = ContentWidth(trackWidth);
@@ -54,8 +57,9 @@ internal sealed record TimelineItem(
         {
             var left = TrackInset + record.StartTime.TotalSeconds / duration * contentWidth;
             var effectiveEnd =
-                record.Kind == TimelineRecordKind.Checkpoint ? record.EndTime
-                : Min(record.EndTime, currentTime);
+                record.Kind == TimelineRecordKind.Checkpoint
+                    ? record.EndTime
+                    : Min(record.EndTime, currentTime);
             var width =
                 record.Kind == TimelineRecordKind.Checkpoint
                     ? MinimumRecordWidth

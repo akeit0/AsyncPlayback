@@ -8,6 +8,7 @@
         <UnoGenerateHotReloadInfo>false</UnoGenerateHotReloadInfo>
         <UnoHotDesignLaunch>false</UnoHotDesignLaunch>
         <UnoDisableHotDesign>true</UnoDisableHotDesign>
+        <UnoDisableMCPSupport>true</UnoDisableMCPSupport>
 
         <ApplicationTitle>AsyncPlayback Timeline</ApplicationTitle>
         <ApplicationId>com.asyncplayback.timeline</ApplicationId>
@@ -23,6 +24,16 @@
     </PropertyGroup>
 
     <ItemGroup>
+        <UnoIcon Include="Assets\icon.svg" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference
+            Include="Uno.WinUI.DevServer"
+            Version="6.5.237"
+            ExcludeAssets="all"
+            PrivateAssets="all"
+        />
         <ProjectReference Include="..\..\src\AsyncPlayback\AsyncPlayback.csproj" />
     </ItemGroup>
 </Project>

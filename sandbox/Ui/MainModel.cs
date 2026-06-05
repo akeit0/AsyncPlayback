@@ -1,4 +1,6 @@
 using AsyncPlayback;
+using Microsoft.Extensions.Logging;
+using Uno.Extensions;
 
 namespace Ui;
 
@@ -9,11 +11,19 @@ internal partial record MainModel
     private bool running;
     private string labelText = "Hello, world!";
     private double rectWidth;
+    private double? activeManualSeekCeilingSeconds;
+    private readonly ILogger logger = LogExtensionPoint.AmbientLoggerFactory.CreateLogger(
+        "MainModel"
+    );
 
     public MainModel()
     {
         playback = CreatePlayback();
     }
+
+    public event Action<PlaybackUiState>? StateChanged;
+
+    public PlaybackUiState Snapshot => CreateUiState();
 
     public IState<PlaybackUiState> Session => State.Value(this, () => CreateUiState());
 
@@ -62,6 +72,7 @@ internal partial record MainModel
         {
             labelText = "Hello, world!";
             rectWidth = 0;
+            activeManualSeekCeilingSeconds = null;
             playback = CreatePlayback();
             await PublishAsync(resetEvents: true);
         }
@@ -85,15 +96,26 @@ internal partial record MainModel
         await MoveToAsync(TimeSpan.FromSeconds(target));
     }
 
+    public void BeginManualSeek()
+    {
+        activeManualSeekCeilingSeconds = playback.Time.TotalSeconds;
+    }
+
+    public void EndManualSeek()
+    {
+        activeManualSeekCeilingSeconds = null;
+    }
+
     public double ClampManualSeekSeconds(double seconds)
     {
         if (double.IsNaN(seconds) || double.IsInfinity(seconds))
             return playback.Time.TotalSeconds;
 
-        return Math.Clamp(seconds, 0, playback.Time.TotalSeconds);
+        var ceiling = activeManualSeekCeilingSeconds ?? playback.Time.TotalSeconds;
+        return Math.Clamp(seconds, 0, ceiling);
     }
 
-    public async ValueTask MoveBackwardToSeconds(double seconds)
+    public async ValueTask MoveManualToSeconds(double seconds)
     {
         await transportGate.WaitAsync();
         try
@@ -101,7 +123,7 @@ internal partial record MainModel
             running = false;
             var target = ClampManualSeekSeconds(seconds);
 
-            if (target >= playback.Time.TotalSeconds - 0.001)
+            if (Math.Abs(target - playback.Time.TotalSeconds) < 0.001)
             {
                 await PublishAsync();
                 return;
@@ -161,28 +183,29 @@ internal partial record MainModel
         _ = Session.UpdateAsync(state =>
         {
             var current = state ?? CreateUiState();
-            return current.WithEvent(e, playback, running);
+            var next = current.WithEvent(e, playback, running);
+            StateChanged?.Invoke(next);
+            return next;
         });
     }
 
-    private ValueTask PublishAsync(bool resetEvents = false)
+    private async ValueTask PublishAsync(bool resetEvents = false)
     {
-        return Session.UpdateAsync(state =>
+        PlaybackUiState? next = null;
+        await Session.UpdateAsync(state =>
         {
             var current = state ?? CreateUiState();
             var events = resetEvents ? [] : current.Events;
-            return CreateUiState(events);
+            next = CreateUiState(events);
+            return next;
         });
+
+        if (next != null)
+            StateChanged?.Invoke(next);
     }
 
     private PlaybackUiState CreateUiState(IReadOnlyList<PlaybackEventItem>? events = null)
     {
-        return PlaybackUiState.FromPlayback(
-            playback,
-            running,
-            labelText,
-            rectWidth,
-            events
-        );
+        return PlaybackUiState.FromPlayback(playback, running, labelText, rectWidth, events);
     }
 }

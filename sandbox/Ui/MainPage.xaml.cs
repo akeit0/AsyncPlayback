@@ -12,6 +12,8 @@ public sealed partial class MainPage : Page
     {
         InitializeComponent();
         DataContext = CreateViewModel(model);
+        model.StateChanged += Model_OnStateChanged;
+        ApplyPlaybackState(model.Snapshot);
 
         TransportSlider.AddHandler(
             PointerPressedEvent,
@@ -38,6 +40,23 @@ public sealed partial class MainPage : Page
         TransportSlider.LostFocus += TransportSlider_OnLostFocus;
     }
 
+    private void Model_OnStateChanged(PlaybackUiState state)
+    {
+        _ = DispatcherQueue.TryEnqueue(() => ApplyPlaybackState(state));
+    }
+
+    private void ApplyPlaybackState(PlaybackUiState state)
+    {
+        TransportSlider.Maximum = Math.Max(0.01, state.DurationSeconds);
+
+        if (sliderInputActive || sliderKeyboardActive)
+            return;
+
+        var value = Math.Clamp(state.TimeSeconds, TransportSlider.Minimum, TransportSlider.Maximum);
+        if (Math.Abs(TransportSlider.Value - value) >= 0.001)
+            TransportSlider.Value = value;
+    }
+
     private static MainViewModel CreateViewModel(MainModel model)
     {
         return (MainViewModel)
@@ -58,6 +77,7 @@ public sealed partial class MainPage : Page
     )
     {
         sliderInputActive = true;
+        model.BeginManualSeek();
         QueueSliderSeek(TransportSlider.Value);
     }
 
@@ -68,6 +88,7 @@ public sealed partial class MainPage : Page
     {
         QueueSliderSeek(TransportSlider.Value);
         sliderInputActive = false;
+        model.EndManualSeek();
     }
 
     private void TransportSlider_OnPointerMoved(
@@ -91,6 +112,7 @@ public sealed partial class MainPage : Page
 
         QueueSliderSeek(TransportSlider.Value);
         sliderInputActive = false;
+        model.EndManualSeek();
     }
 
     private void TransportSlider_OnTapped(
@@ -98,17 +120,21 @@ public sealed partial class MainPage : Page
         Microsoft.UI.Xaml.Input.TappedRoutedEventArgs e
     )
     {
+        model.BeginManualSeek();
         QueueSliderSeek(TransportSlider.Value);
+        model.EndManualSeek();
     }
 
     private void TransportSlider_OnGotFocus(object sender, RoutedEventArgs e)
     {
         sliderKeyboardActive = true;
+        model.BeginManualSeek();
     }
 
     private void TransportSlider_OnLostFocus(object sender, RoutedEventArgs e)
     {
         sliderKeyboardActive = false;
+        model.EndManualSeek();
     }
 
     private void TransportSlider_OnValueChanged(
@@ -147,7 +173,7 @@ public sealed partial class MainPage : Page
             {
                 var seconds = pendingSliderSeconds;
                 lastAppliedSeconds = seconds;
-                await model.MoveBackwardToSeconds(seconds);
+                await model.MoveManualToSeconds(seconds);
 
                 if (Math.Abs(seconds - pendingSliderSeconds) < 0.001)
                     return;
