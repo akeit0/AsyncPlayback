@@ -186,33 +186,59 @@ internal sealed class Timeline
         return best;
     }
 
-    public List<TimelineRecord> GetEvaluationCandidates(
-        in RecordEvaluationQuery query,
-        HashSet<RecordId> evaluatedIds
+    public bool TryGetNextEvaluationCandidate(
+        RecordEvaluationQuery query,
+        HashSet<RecordId> evaluatedIds,
+        out TimelineRecord candidate
     )
     {
         EnsureIndexes();
-        var indexes = new HashSet<int>();
+        candidate = default;
+        var found = false;
+        var bestIndex = 0;
         if (pointEvaluations.TryGetValue(query.Time, out var points))
             foreach (var point in points)
                 if (point.Matches(query.Direction))
-                    indexes.Add(point.RecordIndex);
+                    Consider(point.RecordIndex);
         foreach (var range in rangeEvaluations)
             if (range.Contains(query.Time, query.Direction))
-                indexes.Add(range.RecordIndex);
-        var result = new List<TimelineRecord>(indexes.Count);
-        foreach (var index in indexes)
+                Consider(range.RecordIndex);
+        if (found)
+            candidate = records[bestIndex];
+        return found;
+        void Consider(int index)
         {
             var record = records[index];
-            if (!evaluatedIds.Contains(record.Id) && record.Behavior.IsEvaluatable(record, query))
-                result.Add(record);
+            if (evaluatedIds.Contains(record.Id) || !record.Behavior.IsEvaluatable(record, query))
+                return;
+            if (found && !IsBetterRecord(record, records[bestIndex], query.Direction))
+                return;
+            bestIndex = index;
+            found = true;
         }
-        result.Sort(
-            query.Direction == PlaybackDirection.Forward
-                ? static (a, b) => a.FlatIndex.CompareTo(b.FlatIndex)
-                : static (a, b) => b.FlatIndex.CompareTo(a.FlatIndex)
-        );
-        return result;
+    }
+
+    public bool TryFindNextEvaluationTime(
+        TimeSpan from,
+        TimeSpan to,
+        PlaybackDirection direction,
+        out TimeSpan time
+    )
+    {
+        EnsureIndexes();
+        time = default;
+        var found = false;
+        foreach (var candidate in pointEvaluations.Keys)
+        {
+            if (!IsBetween(candidate, from, to, direction))
+                continue;
+            if (!found || IsBetter(candidate, time, direction))
+            {
+                time = candidate;
+                found = true;
+            }
+        }
+        return found;
     }
 
     internal void AddPointEvaluation(TimeSpan time, int index, PlaybackDirection? direction)
@@ -299,6 +325,31 @@ internal sealed class Timeline
 
     private static long AbsTicks(TimeSpan value) =>
         value.Ticks == long.MinValue ? long.MaxValue : Math.Abs(value.Ticks);
+
+    private static bool IsBetween(
+        TimeSpan time,
+        TimeSpan from,
+        TimeSpan to,
+        PlaybackDirection direction
+    ) =>
+        direction == PlaybackDirection.Forward
+            ? from < time && time <= to
+            : to <= time && time < from;
+
+    private static bool IsBetter(
+        TimeSpan candidate,
+        TimeSpan current,
+        PlaybackDirection direction
+    ) => direction == PlaybackDirection.Forward ? candidate < current : candidate > current;
+
+    private static bool IsBetterRecord(
+        TimelineRecord candidate,
+        TimelineRecord current,
+        PlaybackDirection direction
+    ) =>
+        direction == PlaybackDirection.Forward
+            ? candidate.FlatIndex < current.FlatIndex
+            : candidate.FlatIndex > current.FlatIndex;
 
     private readonly record struct EvaluationPoint(int RecordIndex, PlaybackDirection? Direction)
     {

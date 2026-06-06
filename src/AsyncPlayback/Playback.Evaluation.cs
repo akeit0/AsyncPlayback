@@ -2,40 +2,6 @@ namespace AsyncPlayback;
 
 public sealed partial class Playback
 {
-    private async ValueTask<bool> EvaluateAtAsync(
-        TimeSpan time,
-        PlaybackDirection direction,
-        bool includeLoopEnd
-    )
-    {
-        var evaluatedIds = new HashSet<RecordId>();
-        var evaluatedAny = false;
-
-        MoveTimeTo(time);
-
-        while (true)
-        {
-            var records = timeline.GetEvaluationCandidates(
-                new RecordEvaluationQuery(time, direction, includeLoopEnd) { Playback = this },
-                evaluatedIds
-            );
-
-            if (records.Count == 0)
-                break;
-
-            var record = records[0];
-            evaluatedIds.Add(record.Id);
-
-            await EvaluateRecordAsync(record, time, direction).ConfigureAwait(false);
-            evaluatedAny = true;
-
-            await RunReadyAsync(currentCancellationToken).ConfigureAwait(false);
-            MoveTimeTo(time);
-        }
-
-        return evaluatedAny;
-    }
-
     internal bool HasSeekLoopEndingAt(TimeSpan time, int beforeRecordIndex)
     {
         return timeline.HasSeekLoopEndingAt(time, beforeRecordIndex);
@@ -70,15 +36,6 @@ public sealed partial class Playback
     internal void EmitSeekLoopTrueAt(TimelineRecord loop, TimeSpan targetTime)
     {
         recordRuntime.EmitSeekLoopTrueAt(loop.FlatIndex, loop.StartTime, loop.Duration, targetTime);
-    }
-
-    private ValueTask EvaluateRecordAsync(
-        TimelineRecord record,
-        TimeSpan time,
-        PlaybackDirection direction
-    )
-    {
-        return record.Behavior.EvaluateAsync(this, record, time, direction);
     }
 
     internal async ValueTask EvaluateCheckpointRecordAsync(

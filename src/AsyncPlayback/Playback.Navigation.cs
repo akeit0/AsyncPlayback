@@ -90,7 +90,14 @@ public sealed partial class Playback
 
         if (options.Evaluation == TransportEvaluation.Traverse)
         {
-            await TraverseToAsync(targetTime, direction, options.EvaluateTarget, cancellationToken)
+            await RecordEvaluator
+                .EvaluateTraversalAsync(
+                    this,
+                    targetTime,
+                    direction,
+                    options.EvaluateTarget,
+                    cancellationToken
+                )
                 .ConfigureAwait(false);
 
             if (direction == PlaybackDirection.Backward && Time == TimeSpan.Zero)
@@ -250,7 +257,9 @@ public sealed partial class Playback
             return;
         }
 
-        await EvaluateRecordAsync(record, boundary.Time, direction).ConfigureAwait(false);
+        await RecordEvaluator
+            .EvaluateRecordAsync(this, record, boundary.Time, direction)
+            .ConfigureAwait(false);
         MoveTimeTo(boundary.Time);
     }
 
@@ -262,99 +271,12 @@ public sealed partial class Playback
     {
         if (
             evaluateTarget
-            && await EvaluateAtAsync(targetTime, direction, true).ConfigureAwait(false)
+            && await RecordEvaluator
+                .EvaluateAtAsync(this, targetTime, direction, true)
+                .ConfigureAwait(false)
         )
             return;
 
         MoveToTimelineGap(targetTime);
-    }
-
-    private async ValueTask TraverseToAsync(
-        TimeSpan targetTime,
-        PlaybackDirection direction,
-        bool evaluateTarget,
-        CancellationToken cancellationToken
-    )
-    {
-        while (true)
-        {
-            var boundary = FindNextBoundary(Time, targetTime, direction);
-            if (boundary == null)
-                break;
-
-            await EvaluateAtAsync(boundary.Value.Time, direction, true).ConfigureAwait(false);
-            await RunReadyAsync(cancellationToken).ConfigureAwait(false);
-
-            if (
-                direction == PlaybackDirection.Forward
-                && edgeCursor == PlaybackEdgeCursor.AfterLast
-            )
-                return;
-
-            if (Time == targetTime)
-                return;
-        }
-
-        if (evaluateTarget)
-        {
-            if (await EvaluateAtAsync(targetTime, direction, true).ConfigureAwait(false))
-            {
-                if (
-                    direction == PlaybackDirection.Forward
-                    && edgeCursor == PlaybackEdgeCursor.AfterLast
-                )
-                    return;
-
-                return;
-            }
-        }
-
-        MoveToTimelineGap(targetTime);
-    }
-
-    private TimelineBoundary? FindNextBoundary(
-        TimeSpan from,
-        TimeSpan to,
-        PlaybackDirection direction
-    )
-    {
-        TimelineBoundary? best = null;
-
-        foreach (var boundary in timeline.GetBoundaries(TimelineBoundaryScope.Traversal))
-        {
-            if (!IsBetween(boundary.Time, from, to, direction))
-                continue;
-
-            if (best == null)
-            {
-                best = boundary;
-                continue;
-            }
-
-            if (direction == PlaybackDirection.Forward)
-            {
-                if (boundary.CompareTo(best.Value) < 0)
-                    best = boundary;
-            }
-            else
-            {
-                if (boundary.CompareTo(best.Value) > 0)
-                    best = boundary;
-            }
-        }
-
-        return best;
-    }
-
-    private static bool IsBetween(
-        TimeSpan time,
-        TimeSpan from,
-        TimeSpan to,
-        PlaybackDirection direction
-    )
-    {
-        return direction == PlaybackDirection.Forward
-            ? from < time && time <= to
-            : to <= time && time < from;
     }
 }

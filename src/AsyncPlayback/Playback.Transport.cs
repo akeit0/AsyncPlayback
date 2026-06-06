@@ -424,7 +424,8 @@ public sealed partial class Playback
         if (best == null)
             return false;
 
-        await EvaluateRecordAsync(best.Value, Time, PlaybackDirection.Backward)
+        await RecordEvaluator
+            .EvaluateRecordAsync(this, best.Value, Time, PlaybackDirection.Backward)
             .ConfigureAwait(false);
         return true;
     }
