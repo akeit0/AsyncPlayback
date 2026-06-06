@@ -33,7 +33,7 @@ public readonly partial struct PlaybackTask
         return new(promise, replaySuspended, replayOwnerRecordIndex);
     }
 
-    public readonly struct Awaiter : ICriticalNotifyCompletion, IPlaybackAwaiter
+    public readonly struct Awaiter : INotifyCompletion, IPlaybackAwaiter
     {
         private readonly PlaybackPromise? promise;
         private readonly bool replaySuspended;
@@ -59,11 +59,6 @@ public readonly partial struct PlaybackTask
         }
 
         public void OnCompleted(Action continuation) =>
-            throw new InvalidOperationException(
-                "PlaybackTask can only be awaited by PlaybackTask."
-            );
-
-        public void UnsafeOnCompleted(Action continuation) =>
             throw new InvalidOperationException(
                 "PlaybackTask can only be awaited by PlaybackTask."
             );
@@ -110,7 +105,7 @@ public readonly struct PlaybackTask<T>
         return new(promise, replaySuspended, replayOwnerRecordIndex);
     }
 
-    public readonly struct Awaiter : ICriticalNotifyCompletion, IPlaybackAwaiter
+    public readonly struct Awaiter : INotifyCompletion, IPlaybackAwaiter
     {
         private readonly PlaybackPromise<T>? promise;
         private readonly bool replaySuspended;
@@ -140,11 +135,6 @@ public readonly struct PlaybackTask<T>
         }
 
         public void OnCompleted(Action continuation) =>
-            throw new InvalidOperationException(
-                "PlaybackTask can only be awaited by PlaybackTask."
-            );
-
-        public void UnsafeOnCompleted(Action continuation) =>
             throw new InvalidOperationException(
                 "PlaybackTask can only be awaited by PlaybackTask."
             );

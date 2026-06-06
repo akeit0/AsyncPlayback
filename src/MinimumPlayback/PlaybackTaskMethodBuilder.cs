@@ -34,7 +34,7 @@ public struct PlaybackTaskMethodBuilder
         ref TAwaiter awaiter,
         ref TStateMachine stateMachine
     )
-        where TAwaiter : INotifyCompletion, IPlaybackAwaiter
+        where TAwaiter : IPlaybackAwaiter
         where TStateMachine : IAsyncStateMachine
     {
         core.CaptureAwait(ref awaiter, ref stateMachine);
@@ -44,7 +44,7 @@ public struct PlaybackTaskMethodBuilder
         ref TAwaiter awaiter,
         ref TStateMachine stateMachine
     )
-        where TAwaiter : ICriticalNotifyCompletion, IPlaybackAwaiter
+        where TAwaiter : IPlaybackAwaiter
         where TStateMachine : IAsyncStateMachine
     {
         core.CaptureAwait(ref awaiter, ref stateMachine);
@@ -85,7 +85,7 @@ public struct PlaybackTaskMethodBuilder<T>
         ref TAwaiter awaiter,
         ref TStateMachine stateMachine
     )
-        where TAwaiter : INotifyCompletion, IPlaybackAwaiter
+        where TAwaiter : IPlaybackAwaiter
         where TStateMachine : IAsyncStateMachine
     {
         core.CaptureAwait(ref awaiter, ref stateMachine);
@@ -95,7 +95,7 @@ public struct PlaybackTaskMethodBuilder<T>
         ref TAwaiter awaiter,
         ref TStateMachine stateMachine
     )
-        where TAwaiter : ICriticalNotifyCompletion, IPlaybackAwaiter
+        where TAwaiter : IPlaybackAwaiter
         where TStateMachine : IAsyncStateMachine
     {
         core.CaptureAwait(ref awaiter, ref stateMachine);

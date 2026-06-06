@@ -15,7 +15,7 @@ public readonly struct CheckpointAwaitable
 
     public Awaiter GetAwaiter() => new(playback, label);
 
-    public readonly struct Awaiter : ICriticalNotifyCompletion, IPlaybackAwaiter
+    public readonly struct Awaiter : INotifyCompletion, IPlaybackAwaiter
     {
         private readonly Playback playback;
         private readonly string label;
@@ -33,7 +33,5 @@ public readonly struct CheckpointAwaitable
         public void GetResult() { }
 
         public void OnCompleted(Action continuation) { }
-
-        public void UnsafeOnCompleted(Action continuation) { }
     }
 }

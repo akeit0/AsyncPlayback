@@ -315,38 +315,7 @@ Forward movement runs from one stop to the next:
 start -> fib(2) -> fib(1) -> CallEnd -> fib(0) -> CallEnd -> CallEnd -> end=1 -> Completed
 ```
 
-## C# Async Lowering
-
-A method like this:
-
-```csharp
-static async PlaybackTask<int> Fib(int n)
-{
-    await Checkpoint($"fib({n})");
-    if (n <= 1)
-        return n;
-
-    var left = await Fib(n - 1);
-    var right = await Fib(n - 2);
-    return left + right;
-}
-```
-
-is compiled into roughly:
-
-```text
-state machine type
-  fields:
-    builder
-    state
-    locals
-    awaiter fields
-
-  MoveNext()
-    run until an incomplete await
-    ask builder to register continuation
-    return
-```
+## Async Builder Hook
 
 The custom async method builder is selected by:
 
@@ -362,8 +331,9 @@ and:
 public readonly struct PlaybackTask<T>
 ```
 
-That means the compiler calls `PlaybackTaskMethodBuilder` instead of the normal
-`AsyncTaskMethodBuilder`.  The builder receives:
+That means the compiler-generated state machine calls
+`PlaybackTaskMethodBuilder` instead of the normal `AsyncTaskMethodBuilder`.
+The important callbacks are:
 
 ```text
 Start(ref stateMachine)
@@ -372,10 +342,8 @@ SetResult(...)
 SetException(...)
 ```
 
-Those callbacks are the only place where `MinimumPlayback` integrates with C#
-async execution.
-
-The builder turns those callbacks into runner creation, stop capture, promise
+Those callbacks are the only place where `MinimumPlayback` hooks into C# async
+execution.  The builder turns them into runner creation, stop capture, promise
 completion, and timeline records.
 
 ## Runtime Scope
@@ -409,9 +377,10 @@ private int recordCount;
 private int cursor;
 ```
 
-`records` stores the visible timeline.  `recordRunners` maps a record index to
-the runner that can resume from that record.  `stopIdsByRecord` maps a record
-index to a runner-local stop id, stored as `stopId + 1` so zero means missing.
+`records` stores the visible timeline.  `recordRunners` and
+`stopIdsByRecord` map resumable stop records to the runner and runner-local
+stop id that can resume from that record.  Stop ids are stored as `stopId + 1`
+so zero means missing.
 
 `Playback` also owns movement mode:
 
@@ -439,8 +408,6 @@ internal sealed class PlaybackRunner<TStateMachine>
     where TStateMachine : IAsyncStateMachine
 ```
 
-The runner owns the compiler-generated state machine snapshots:
-
 ```csharp
 private TStateMachine initial;
 private TStateMachine current;
@@ -448,9 +415,10 @@ private TStateMachine[] stops;
 private int stopCount;
 ```
 
-The same `stops` array stores both checkpoint snapshots and parent-await
-continuation snapshots.  This is possible because call-end stops are always
-movement boundaries in the minimal model.
+`initial` is the state before first execution.  `current` is the executable
+copy.  `stops` stores snapshots captured at explicit checkpoints and parent
+await sites.  One array is enough because both checkpoint records and call-end
+records are movement boundaries in the minimal model.
 
 ### PlaybackPromise
 
@@ -800,7 +768,7 @@ This makes backward movement deterministic: moving back from a stop proves that
 the segment can be replayed forward to that same stop.
 
 ```mermaid
-flowchart LR
+flowchart TD
     Existing["existing records"]
     ReplayIndex["replayConsumeIndex"]
     Operation["record operation<br/>AddCheckpoint/AddCall/AddCallEnd/Completed"]
