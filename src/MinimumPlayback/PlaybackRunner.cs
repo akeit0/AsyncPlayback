@@ -10,8 +10,7 @@ internal interface IPlaybackRunner
     void AddChild(IPlaybackRunner child);
     void MoveNext();
     void RestoreInitial();
-    void RestoreRecord(int recordIndex);
-    void BindRecord(int checkpointId, int recordIndex);
+    void RestoreCheckpoint(int checkpointId, int recordIndex);
     void MarkCompleted();
 }
 
@@ -22,7 +21,7 @@ internal sealed class PlaybackRunner<TStateMachine> : IPlaybackRunner
     private readonly IPlaybackRunner? parent;
     private IPlaybackRunner[] children = [];
     private int childCount;
-    private CheckpointSlot[] checkpoints = [];
+    private TStateMachine[] checkpoints = [];
     private TStateMachine initial = default!;
     private TStateMachine current = default!;
     private int nextCheckpointId;
@@ -64,18 +63,9 @@ internal sealed class PlaybackRunner<TStateMachine> : IPlaybackRunner
         CurrentRecordIndex = null;
     }
 
-    public void RestoreRecord(int recordIndex)
+    public void RestoreCheckpoint(int checkpointId, int recordIndex)
     {
-        var checkpoint = FindCheckpoint(recordIndex);
-        current = SnapshotStateMachine(checkpoint.State);
-        CurrentRecordIndex = recordIndex;
-    }
-
-    public void BindRecord(int checkpointId, int recordIndex)
-    {
-        var checkpoint = checkpoints[checkpointId];
-        checkpoint.RecordIndex = recordIndex;
-        checkpoints[checkpointId] = checkpoint;
+        current = SnapshotStateMachine(checkpoints[checkpointId]);
         CurrentRecordIndex = recordIndex;
     }
 
@@ -84,9 +74,7 @@ internal sealed class PlaybackRunner<TStateMachine> : IPlaybackRunner
         current = SnapshotStateMachine(stateMachine);
         var checkpointId = nextCheckpointId++;
         EnsureCheckpointCapacity(checkpointId + 1);
-        ref var checkpoint = ref checkpoints[checkpointId];
-        checkpoint.State = SnapshotStateMachine(stateMachine);
-        checkpoint.RecordIndex = -1;
+        checkpoints[checkpointId] = SnapshotStateMachine(stateMachine);
         return playback.AddCheckpoint(this, checkpointId, label);
     }
 
@@ -105,18 +93,6 @@ internal sealed class PlaybackRunner<TStateMachine> : IPlaybackRunner
     {
         if (parent == null)
             playback.OnRootCompleted();
-    }
-
-    private CheckpointSlot FindCheckpoint(int recordIndex)
-    {
-        for (var i = 0; i < nextCheckpointId; i++)
-        {
-            var checkpoint = checkpoints[i];
-            if (checkpoint.RecordIndex == recordIndex)
-                return checkpoint;
-        }
-
-        throw new InvalidOperationException("Checkpoint record was not found.");
     }
 
     private static TStateMachine SnapshotStateMachine(TStateMachine source)
@@ -147,17 +123,5 @@ internal sealed class PlaybackRunner<TStateMachine> : IPlaybackRunner
         while (capacity < required)
             capacity *= 2;
         Array.Resize(ref checkpoints, capacity);
-    }
-
-    private struct CheckpointSlot
-    {
-        public CheckpointSlot(TStateMachine state, int recordIndex)
-        {
-            State = state;
-            RecordIndex = recordIndex;
-        }
-
-        public TStateMachine State;
-        public int RecordIndex;
     }
 }

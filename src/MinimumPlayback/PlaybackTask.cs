@@ -111,7 +111,11 @@ public readonly struct PlaybackTask<T>
         private readonly bool replaySuspended;
         private readonly int replayOwnerRecordIndex;
 
-        internal Awaiter(PlaybackPromise<T>? promise, bool replaySuspended, int replayOwnerRecordIndex)
+        internal Awaiter(
+            PlaybackPromise<T>? promise,
+            bool replaySuspended,
+            int replayOwnerRecordIndex
+        )
         {
             this.promise = promise;
             this.replaySuspended = replaySuspended;

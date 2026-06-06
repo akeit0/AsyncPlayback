@@ -4,6 +4,7 @@ public sealed class Playback
 {
     private PlaybackRecord[] records = [];
     private IPlaybackRunner?[] recordRunners = [];
+    private int[] checkpointIdsByRecord = [];
     private int recordCount;
     private IPlaybackRunner? rootRunner;
     private int cursor = -1;
@@ -71,10 +72,10 @@ public sealed class Playback
             PlaybackRecordRole.Checkpoint,
             label,
             runner.Depth,
-            runner.CallRecordIndex
+            runner.CallRecordIndex ?? -1
         );
-        runner.BindRecord(checkpointId, record.Index);
         recordRunners[record.Index] = runner;
+        checkpointIdsByRecord[record.Index] = checkpointId + 1;
         return record.Index;
     }
 
@@ -85,7 +86,7 @@ public sealed class Playback
             PlaybackRecordRole.Call,
             label,
             parent.Depth + 1,
-            parent.CurrentRecordIndex
+            parent.CurrentRecordIndex ?? -1
         ).Index;
     }
 
@@ -149,7 +150,11 @@ public sealed class Playback
     private IPlaybackRunner Restore(PlaybackRecord record)
     {
         var runner = GetRunner(record);
-        runner.RestoreRecord(record.Index);
+        var checkpointKey = checkpointIdsByRecord[record.Index];
+        if (checkpointKey == 0)
+            throw new InvalidOperationException("Record checkpoint was not found.");
+
+        runner.RestoreCheckpoint(checkpointKey - 1, record.Index);
         return runner;
     }
 
@@ -166,7 +171,7 @@ public sealed class Playback
         PlaybackRecordRole role,
         string label,
         int depth,
-        int? parentIndex
+        int parentIndex
     )
     {
         EnsureRecordCapacity();
@@ -184,6 +189,7 @@ public sealed class Playback
         {
             Array.Clear(records, index, recordCount - index);
             Array.Clear(recordRunners, index, recordCount - index);
+            Array.Clear(checkpointIdsByRecord, index, recordCount - index);
             recordCount = index;
         }
         rewriteFrom = null;
@@ -215,5 +221,6 @@ public sealed class Playback
         var capacity = records.Length == 0 ? 8 : records.Length * 2;
         Array.Resize(ref records, capacity);
         Array.Resize(ref recordRunners, capacity);
+        Array.Resize(ref checkpointIdsByRecord, capacity);
     }
 }

@@ -2,8 +2,7 @@ namespace MinimumPlayback;
 
 public class PlaybackPromise
 {
-    private Action[] continuations = [];
-    private int continuationCount;
+    private Action? continuation;
     private Exception? exception;
     private bool completed;
 
@@ -15,12 +14,15 @@ public class PlaybackPromise
     internal void AddContinuation(Action continuation)
     {
         if (completed)
-            continuation();
-        else
         {
-            EnsureContinuationCapacity();
-            continuations[continuationCount++] = continuation;
+            continuation();
+            return;
         }
+
+        if (this.continuation != null)
+            throw new InvalidOperationException("PlaybackTask supports only one awaiter.");
+
+        this.continuation = continuation;
     }
 
     internal void TrySetResult()
@@ -59,18 +61,9 @@ public class PlaybackPromise
 
     protected void Complete()
     {
-        for (var i = 0; i < continuationCount; i++)
-            continuations[i]();
-        Array.Clear(continuations, 0, continuationCount);
-        continuationCount = 0;
-    }
-
-    private void EnsureContinuationCapacity()
-    {
-        if (continuationCount < continuations.Length)
-            return;
-
-        Array.Resize(ref continuations, continuations.Length == 0 ? 4 : continuations.Length * 2);
+        var callback = continuation;
+        continuation = null;
+        callback?.Invoke();
     }
 }
 

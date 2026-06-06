@@ -14,7 +14,7 @@ MoveBack(playback2, "p2");
 MoveNext(playback1, "p1");
 MoveNext(playback2, "p2");
 
-for (var i = 0; i < 64 && (!playback1.IsCompleted || !playback2.IsCompleted); i++)
+for (var i = 0; i < 128 && (!playback1.IsCompleted || !playback2.IsCompleted); i++)
 {
     if ((i & 1) == 0)
     {
@@ -45,7 +45,6 @@ static async PlaybackTask<int> Fib(Playback playback, string name, int n)
 
     if (n <= 1)
     {
-        //await playback.Checkpoint($"{name}:fib({n}):leaf");
         return n;
     }
 
@@ -53,7 +52,7 @@ static async PlaybackTask<int> Fib(Playback playback, string name, int n)
     await playback.Checkpoint($"{name}:fib({n}):middle={left}");
     var right = await Fib(playback, name, n - 2);
     var value = left + right;
-    //await playback.Checkpoint($"{name}:fib({n}):exit={value}");
+    await playback.Checkpoint($"{name}:fib({n}):exit={value}");
     return value;
 }
 

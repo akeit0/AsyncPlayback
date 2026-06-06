@@ -11,5 +11,5 @@ public readonly record struct PlaybackRecord(
     PlaybackRecordRole Role,
     string Label,
     int Depth,
-    int? ParentIndex
+    int ParentIndex
 );
