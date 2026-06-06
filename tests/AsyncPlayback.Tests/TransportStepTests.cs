@@ -2033,14 +2033,14 @@ public sealed class TransportStepTests
         }
 
         public override ValueTask EvaluateAsync(
-            RecordEvaluationContext context,
+            Playback playback,
             TimelineRecord record,
             TimeSpan time,
             PlaybackDirection direction
         )
         {
             Evaluations++;
-            context.MarkEvaluated(record, PlaybackBoundaryKind.Point, time);
+            playback.MarkRecordEvaluated(record, PlaybackBoundaryKind.Point, time);
             return ValueTask.CompletedTask;
         }
     }

@@ -52,13 +52,13 @@ internal sealed class CheckpointRecordBehavior : TimelineRecordBehavior
     }
 
     public override ValueTask EvaluateAsync(
-        RecordEvaluationContext context,
+        Playback playback,
         TimelineRecord record,
         TimeSpan time,
         PlaybackDirection direction
     )
     {
-        return context.Playback.EmitCheckpointAsync(record, direction);
+        return playback.EvaluateCheckpointRecordAsync(record, direction);
     }
 
     public override TimelineRecordInfo ToInfo(in TimelineRecord record)

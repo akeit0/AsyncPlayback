@@ -39,13 +39,40 @@ internal sealed class DelayRecordBehavior : TimelineRecordBehavior
     }
 
     public override ValueTask EvaluateAsync(
-        RecordEvaluationContext context,
+        Playback playback,
         TimelineRecord record,
         TimeSpan time,
         PlaybackDirection direction
     )
     {
-        return context.Playback.EmitDelayAtAsync(record, time, direction);
+        return EvaluateDelayAsync(playback, record, time, direction);
+    }
+
+    private static async ValueTask EvaluateDelayAsync(
+        Playback playback,
+        TimelineRecord delay,
+        TimeSpan targetTime,
+        PlaybackDirection direction
+    )
+    {
+        var mustRestore =
+            direction == PlaybackDirection.Backward || !playback.HasPendingDelay(delay.FlatIndex);
+
+        if (mustRestore)
+            playback.RestoreToRecord(delay.Id);
+
+        playback.MoveTimeTo(targetTime);
+
+        playback.CompleteDelayRecord(delay.FlatIndex);
+        playback.SetCurrentRecord(delay.Id);
+        playback.EmitBoundaryReached(
+            delay.Id,
+            Playback.ToBoundaryKind(delay, targetTime),
+            targetTime
+        );
+
+        await playback.RunReadyAsync(playback.CurrentCancellationToken).ConfigureAwait(false);
+        playback.EmitCurrentBoundaryReachedAt(targetTime);
     }
 
     internal override TimelineBoundary? GetCurrentBoundaryPosition(

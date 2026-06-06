@@ -245,13 +245,13 @@ public sealed partial class Playback
         while ((await TryStepBackAsync(cancellationToken).ConfigureAwait(false)).Moved) { }
     }
 
-    private async ValueTask RunReadyAsync(CancellationToken cancellationToken = default)
+    internal async ValueTask RunReadyAsync(CancellationToken cancellationToken = default)
     {
         while (TryRunOneReady())
             await Task.Yield();
     }
 
-    private async ValueTask RunUntilIdleAsync(CancellationToken cancellationToken = default)
+    internal async ValueTask RunUntilIdleAsync(CancellationToken cancellationToken = default)
     {
         while (true)
         {

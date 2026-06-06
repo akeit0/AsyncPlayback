@@ -14,7 +14,7 @@ public interface ITimelineRecordBehavior
     bool IsEvaluatable(in TimelineRecord record, in RecordEvaluationQuery query);
 
     ValueTask EvaluateAsync(
-        RecordEvaluationContext context,
+        Playback playback,
         TimelineRecord record,
         TimeSpan time,
         PlaybackDirection direction

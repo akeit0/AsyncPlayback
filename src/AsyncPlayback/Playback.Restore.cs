@@ -2,7 +2,7 @@ namespace AsyncPlayback;
 
 public sealed partial class Playback
 {
-    private void RestoreToRecord(RecordId recordId)
+    internal void RestoreToRecord(RecordId recordId)
     {
         var record = GetRecord(recordId);
 
@@ -17,7 +17,7 @@ public sealed partial class Playback
         SetCurrentRecord(record.Id);
     }
 
-    private void RestoreRunnerTreeTo(TimelineCheckpoint target, bool reconnectParentContinuations)
+    internal void RestoreRunnerTreeTo(TimelineCheckpoint target, bool reconnectParentContinuations)
     {
         scheduler.ResetReady();
         activeSeekLoopIndexes.Clear();
@@ -72,7 +72,7 @@ public sealed partial class Playback
         return stateStore.CaptureSnapshot();
     }
 
-    private void RestoreResumeStoreSnapshot(TimelineCheckpoint checkpoint)
+    internal void RestoreResumeStoreSnapshot(TimelineCheckpoint checkpoint)
     {
         stateStore.RestoreResume(checkpoint);
     }
@@ -83,12 +83,11 @@ public sealed partial class Playback
         var cancellationToken = currentCancellationToken;
         var startTimestamp = TimeProvider.GetTimestamp();
         var direction = currentDirection;
-        var executeAsync = record.ExecuteAsync;
         scheduler.BeginExternalEffect();
 
-        _ = RunEffectAsync(
+        _ = record.EffectBehavior.RunAsync(
+            this,
             record.Id,
-            executeAsync,
             promise,
             startTimestamp,
             direction,
@@ -96,70 +95,35 @@ public sealed partial class Playback
         );
     }
 
-    private async Task RunEffectAsync(
-        RecordId recordId,
-        Func<CancellationToken, ValueTask<object?>> executeAsync,
-        PlaybackPromiseBase promise,
-        long startTimestamp,
-        PlaybackDirection direction,
-        CancellationToken cancellationToken
-    )
-    {
-        try
-        {
-            var result = await executeAsync(cancellationToken).ConfigureAwait(false);
-            var endTimestamp = TimeProvider.GetTimestamp();
-            Post(
-                new PostedEffectCompletion(
-                    this,
-                    recordId,
-                    promise,
-                    startTimestamp,
-                    endTimestamp,
-                    direction,
-                    result
-                ),
-                CompletePostedEffect
-            );
-        }
-        catch (Exception exception)
-        {
-            var endTimestamp = TimeProvider.GetTimestamp();
-            Post(
-                new PostedEffectFailure(
-                    this,
-                    recordId,
-                    promise,
-                    startTimestamp,
-                    endTimestamp,
-                    direction,
-                    exception
-                ),
-                FailPostedEffect
-            );
-        }
-        finally
-        {
-            scheduler.EndExternalEffect();
-        }
-    }
-
-    private void CompleteEffect(
+    internal void PostEffectFailure(
         RecordId recordId,
         PlaybackPromiseBase promise,
         long startTimestamp,
-        long endTimestamp,
         PlaybackDirection direction,
-        object? result
+        Exception exception
     )
     {
-        CompleteEffectRecord(recordId, promise, startTimestamp, endTimestamp, direction);
-        ref var record = ref GetRecordRef(GetRecordIndex(recordId));
-        record.SetEffectResult(result);
-        promise.TrySetObjectResult(result);
+        var endTimestamp = TimeProvider.GetTimestamp();
+        Post(
+            new PostedEffectFailure(
+                this,
+                recordId,
+                promise,
+                startTimestamp,
+                endTimestamp,
+                direction,
+                exception
+            ),
+            FailPostedEffect
+        );
     }
 
-    private void FailEffect(
+    internal void EndExternalEffect()
+    {
+        scheduler.EndExternalEffect();
+    }
+
+    internal void FailEffect(
         RecordId recordId,
         PlaybackPromiseBase promise,
         long startTimestamp,
@@ -172,7 +136,7 @@ public sealed partial class Playback
         promise.TrySetException(exception);
     }
 
-    private void CompleteEffectRecord(
+    internal void CompleteEffectRecord(
         RecordId recordId,
         PlaybackPromiseBase promise,
         long startTimestamp,
@@ -356,8 +320,7 @@ public sealed partial class Playback
 
                 if (currentDirection == PlaybackDirection.Backward)
                 {
-                    effect.TryGetEffectResult(out var result);
-                    promise.TrySetObjectResult(result);
+                    effect.EffectBehavior.ReplayResult(promise);
                     break;
                 }
 
@@ -423,7 +386,7 @@ public sealed partial class Playback
         }
     }
 
-    private void MoveTimeTo(TimeSpan time)
+    internal void MoveTimeTo(TimeSpan time)
     {
         Time = time;
     }
@@ -509,16 +472,6 @@ public sealed partial class Playback
             PlaybackMoveMode.TargetOnly => TransportEvaluation.TargetOnly,
             PlaybackMoveMode.Traverse => TransportEvaluation.Traverse,
             _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, null),
-        };
-    }
-
-    private static PlaybackMoveMode ToMoveMode(TransportEvaluation evaluation)
-    {
-        return evaluation switch
-        {
-            TransportEvaluation.TargetOnly => PlaybackMoveMode.TargetOnly,
-            TransportEvaluation.Traverse => PlaybackMoveMode.Traverse,
-            _ => throw new ArgumentOutOfRangeException(nameof(evaluation), evaluation, null),
         };
     }
 

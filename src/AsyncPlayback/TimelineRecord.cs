@@ -75,12 +75,28 @@ public struct TimelineRecord
         RecordId id,
         TimeSpan startTime,
         string debugLabel,
-        Func<CancellationToken, ValueTask<object?>> executeAsync
+        Func<CancellationToken, ValueTask> executeAsync
     )
     {
         return new(
             id,
-            new EffectRecordBehavior(executeAsync),
+            new VoidEffectRecordBehavior(executeAsync),
+            startTime,
+            TimeSpan.Zero,
+            debugLabel
+        );
+    }
+
+    public static TimelineRecord Effect<T>(
+        RecordId id,
+        TimeSpan startTime,
+        string debugLabel,
+        Func<CancellationToken, ValueTask<T>> executeAsync
+    )
+    {
+        return new(
+            id,
+            new EffectRecordBehavior<T>(executeAsync),
             startTime,
             TimeSpan.Zero,
             debugLabel
@@ -142,22 +158,7 @@ public struct TimelineRecord
         return Behavior is CheckpointRecordBehavior checkpoint && checkpoint.CheckpointKind == kind;
     }
 
-    internal Func<CancellationToken, ValueTask<object?>> ExecuteAsync =>
-        EffectBehavior.ExecuteAsync;
-
-    internal bool TryGetEffectResult(out object? result)
-    {
-        var behavior = EffectBehavior;
-        result = behavior.Result;
-        return behavior.HasResult;
-    }
-
-    internal void SetEffectResult(object? result)
-    {
-        var behavior = EffectBehavior;
-        behavior.Result = result;
-        behavior.HasResult = true;
-    }
+    internal EffectRecordBehavior EffectBehavior => GetEffectBehavior();
 
     internal IPlaybackRunner ParentRunner
     {
@@ -208,15 +209,12 @@ public struct TimelineRecord
         }
     }
 
-    private EffectRecordBehavior EffectBehavior
+    private EffectRecordBehavior GetEffectBehavior()
     {
-        get
-        {
-            if (Behavior is not EffectRecordBehavior behavior)
-                throw new InvalidOperationException("Record is not an effect.");
+        if (Behavior is not EffectRecordBehavior behavior)
+            throw new InvalidOperationException("Record is not an effect.");
 
-            return behavior;
-        }
+        return behavior;
     }
 
     private CallRecordBehavior CallBehavior

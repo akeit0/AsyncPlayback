@@ -35,13 +35,13 @@ public abstract class TimelineRecordBehavior : ITimelineRecordBehavior
     }
 
     public virtual ValueTask EvaluateAsync(
-        RecordEvaluationContext context,
+        Playback playback,
         TimelineRecord record,
         TimeSpan time,
         PlaybackDirection direction
     )
     {
-        context.MarkEvaluated(record, null, time);
+        playback.MarkRecordEvaluated(record, null, time);
         return ValueTask.CompletedTask;
     }
 

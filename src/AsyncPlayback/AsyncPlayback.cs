@@ -25,19 +25,6 @@ public sealed partial class Playback
         );
     };
 
-    private static readonly Action<PostedEffectCompletion> CompletePostedEffect =
-        static completion =>
-        {
-            completion.Playback.CompleteEffect(
-                completion.RecordId,
-                completion.Promise,
-                completion.StartTimestamp,
-                completion.EndTimestamp,
-                completion.Direction,
-                completion.Result
-            );
-        };
-
     private static readonly Action<PostedEffectFailure> FailPostedEffect = static failure =>
     {
         failure.Playback.FailEffect(
@@ -92,6 +79,8 @@ public sealed partial class Playback
     public bool IsCompleted { get; private set; }
 
     internal TimeSpan TransportStartTime => transportStartTime;
+
+    internal CancellationToken CurrentCancellationToken => currentCancellationToken;
 
     public event Action<PlaybackEvent>? EventOccurred;
 
@@ -299,14 +288,7 @@ public sealed partial class Playback
 
         EnsureCurrentPlayback();
 
-        var record = UseEffectRecord(
-            debugLabel,
-            async cancellationToken =>
-            {
-                await effect(cancellationToken).ConfigureAwait(false);
-                return null;
-            }
-        );
+        var record = UseEffectRecord(debugLabel, effect);
 
         if (currentDirection == PlaybackDirection.Backward)
         {
@@ -350,22 +332,11 @@ public sealed partial class Playback
 
         EnsureCurrentPlayback();
 
-        var record = UseEffectRecord(
-            debugLabel,
-            async cancellationToken => await effect(cancellationToken).ConfigureAwait(false)
-        );
-
-        if (currentDirection == PlaybackDirection.Backward)
-            return PlaybackTask<T>.SuspendReplayAt(PlaybackPromiseKind.Effect, record.FlatIndex);
+        var record = UseEffectRecord(debugLabel, effect);
 
         if (currentDirection == PlaybackDirection.Backward)
         {
-            if (!record.TryGetEffectResult(out var result))
-                throw new InvalidOperationException(
-                    $"Effect record '{record.DebugLabel}' has no recorded result."
-                );
-
-            return PlaybackTask<T>.FromResult((T)result!);
+            return PlaybackTask<T>.SuspendReplayAt(PlaybackPromiseKind.Effect, record.FlatIndex);
         }
 
         var promise = new PlaybackPromise<T>(this, PlaybackPromiseKind.Effect)
@@ -489,7 +460,7 @@ public sealed partial class Playback
         return currentRecordIndex is { } index ? GetRecord(index) : null;
     }
 
-    private void SetCurrentRecord(RecordId recordId)
+    internal void SetCurrentRecord(RecordId recordId)
     {
         currentRecordIndex = GetRecordIndex(recordId);
     }
@@ -519,16 +490,6 @@ public sealed partial class Playback
     );
 
     private sealed record PostedDelayCompletion(Playback Playback, int RecordIndex);
-
-    private sealed record PostedEffectCompletion(
-        Playback Playback,
-        RecordId RecordId,
-        PlaybackPromiseBase Promise,
-        long StartTimestamp,
-        long EndTimestamp,
-        PlaybackDirection Direction,
-        object? Result
-    );
 
     private sealed record PostedEffectFailure(
         Playback Playback,

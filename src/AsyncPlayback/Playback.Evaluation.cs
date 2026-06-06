@@ -82,88 +82,47 @@ public sealed partial class Playback
         return false;
     }
 
+    internal bool HasPendingDelay(int recordIndex)
+    {
+        return recordRuntime.HasPendingDelay(recordIndex);
+    }
+
+    internal void CompleteDelayRecord(int recordIndex)
+    {
+        recordRuntime.CompleteDelay(recordIndex);
+    }
+
+    internal void RestoreEntryState(int recordIndex)
+    {
+        stateStore.RestoreEntry(recordIndex);
+    }
+
+    internal void EnterPlaybackAfterRecord(int recordIndex)
+    {
+        Mode = PlaybackMode.Playback;
+        playbackRecordIndex = Math.Min(recordIndex + 1, records.Count);
+    }
+
+    internal void SuppressLoopExitForRecord(int recordIndex)
+    {
+        suppressLoopExitForIndex = recordIndex;
+    }
+
+    internal void EmitSeekLoopTrueAt(TimelineRecord loop, TimeSpan targetTime)
+    {
+        recordRuntime.EmitSeekLoopTrueAt(loop.FlatIndex, loop.StartTime, loop.Duration, targetTime);
+    }
+
     private ValueTask EvaluateRecordAsync(
         TimelineRecord record,
         TimeSpan time,
         PlaybackDirection direction
     )
     {
-        return record.Behavior.EvaluateAsync(
-            new RecordEvaluationContext(this),
-            record,
-            time,
-            direction
-        );
+        return record.Behavior.EvaluateAsync(this, record, time, direction);
     }
 
-    internal async ValueTask EmitDelayAtAsync(
-        TimelineRecord delay,
-        TimeSpan targetTime,
-        PlaybackDirection direction
-    )
-    {
-        var mustRestore =
-            direction == PlaybackDirection.Backward
-            || !recordRuntime.HasPendingDelay(delay.FlatIndex);
-
-        if (mustRestore)
-            RestoreToRecord(delay.Id);
-
-        MoveTimeTo(targetTime);
-
-        recordRuntime.CompleteDelay(delay.FlatIndex);
-        SetCurrentRecord(delay.Id);
-        EmitBoundaryReached(delay.Id, ToBoundaryKind(delay, targetTime), targetTime);
-
-        await RunReadyAsync(currentCancellationToken).ConfigureAwait(false);
-        EmitCurrentBoundaryReachedAt(targetTime);
-    }
-
-    internal async ValueTask EmitEffectAtAsync(TimelineRecord effect, PlaybackDirection direction)
-    {
-        if (direction == PlaybackDirection.Backward)
-        {
-            MoveTimeTo(effect.StartTime);
-            stateStore.RestoreEntry(effect.FlatIndex);
-            SetCurrentRecord(effect.Id);
-            Mode = PlaybackMode.Playback;
-            playbackRecordIndex = Math.Min(effect.FlatIndex + 1, records.Count);
-            EmitBoundaryReached(effect.Id, TimelineBoundaryKind.Start, effect.StartTime);
-            return;
-        }
-
-        RestoreToRecord(effect.Id);
-        await RunReadyAsync(currentCancellationToken).ConfigureAwait(false);
-        SetCurrentRecord(effect.Id);
-        EmitBoundaryReached(effect.Id, TimelineBoundaryKind.Start, effect.StartTime);
-    }
-
-    internal async ValueTask EmitSeekLoopAtAsync(
-        TimelineRecord loop,
-        TimeSpan targetTime,
-        PlaybackDirection direction
-    )
-    {
-        var active = HasActiveSeekLoop(loop);
-
-        var mustRestore = direction == PlaybackDirection.Backward || !active;
-
-        if (mustRestore)
-            RestoreToRecord(loop.Id);
-
-        MoveTimeTo(targetTime);
-
-        if (direction == PlaybackDirection.Backward && targetTime == loop.EndTime)
-            suppressLoopExitForIndex = loop.FlatIndex;
-
-        recordRuntime.EmitSeekLoopTrueAt(loop.FlatIndex, loop.StartTime, loop.Duration, targetTime);
-        await RunReadyAsync(currentCancellationToken).ConfigureAwait(false);
-
-        SetCurrentRecord(loop.Id);
-        EmitBoundaryReached(loop.Id, ToBoundaryKind(loop, targetTime), targetTime);
-    }
-
-    internal async ValueTask EmitCheckpointAsync(
+    internal async ValueTask EvaluateCheckpointRecordAsync(
         TimelineRecord checkpoint,
         PlaybackDirection direction
     )
@@ -205,7 +164,7 @@ public sealed partial class Playback
         EmitBoundaryReached(checkpoint.Id, TimelineBoundaryKind.Point, checkpoint.StartTime);
     }
 
-    private bool HasActiveSeekLoop(TimelineRecord loop)
+    internal bool HasActiveSeekLoop(TimelineRecord loop)
     {
         foreach (var activeIndex in activeSeekLoopIndexes)
             if (
@@ -217,7 +176,7 @@ public sealed partial class Playback
         return false;
     }
 
-    private void EmitBoundaryReached(
+    internal void EmitBoundaryReached(
         RecordId recordId,
         TimelineBoundaryKind? boundaryKind,
         TimeSpan eventTime
@@ -243,7 +202,7 @@ public sealed partial class Playback
         EmitBoundaryReached(GetRecord(boundary.RecordIndex).Id, boundary.Kind, boundary.Time);
     }
 
-    internal void MarkRecordEvaluated(
+    public void MarkRecordEvaluated(
         TimelineRecord record,
         PlaybackBoundaryKind? boundaryKind,
         TimeSpan time
@@ -265,7 +224,7 @@ public sealed partial class Playback
             EmitBoundaryReached(record.Id, TimelineBoundaryKind.Start, record.StartTime);
     }
 
-    private void EmitCurrentBoundaryReachedAt(TimeSpan time)
+    internal void EmitCurrentBoundaryReachedAt(TimeSpan time)
     {
         if (GetCurrentBoundaryPosition() is { } boundary && boundary.Time == time)
             EmitBoundaryReached(boundary);
@@ -302,7 +261,7 @@ public sealed partial class Playback
         emittedBoundaries.Clear();
     }
 
-    private static TimelineBoundaryKind? ToBoundaryKind(TimelineRecord record, TimeSpan time)
+    internal static TimelineBoundaryKind? ToBoundaryKind(TimelineRecord record, TimeSpan time)
     {
         if (time == record.StartTime)
             return TimelineBoundaryKind.Start;

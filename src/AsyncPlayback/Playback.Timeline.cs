@@ -45,7 +45,27 @@ public sealed partial class Playback
 
     private TimelineRecord UseEffectRecord(
         string debugLabel,
-        Func<CancellationToken, ValueTask<object?>> executeAsync
+        Func<CancellationToken, ValueTask> executeAsync
+    )
+    {
+        debugLabel = string.IsNullOrWhiteSpace(debugLabel) ? "Effect" : debugLabel;
+
+        if (Mode == PlaybackMode.Playback)
+        {
+            if (TryConsumeExistingEffectRecord(debugLabel, out var existing))
+                return existing;
+
+            SwitchToRecordingFromPlaybackCursor();
+        }
+
+        var record = TimelineRecord.Effect(NextRecordId(), Time, debugLabel, executeAsync);
+
+        return AddRecord(record);
+    }
+
+    private TimelineRecord UseEffectRecord<T>(
+        string debugLabel,
+        Func<CancellationToken, ValueTask<T>> executeAsync
     )
     {
         debugLabel = string.IsNullOrWhiteSpace(debugLabel) ? "Effect" : debugLabel;
@@ -206,7 +226,7 @@ public sealed partial class Playback
 
         var effect = records[playbackRecordIndex];
         var request = new TimelineRecordCreateRequest(
-            new EffectRecordBehavior(_ => ValueTask.FromResult<object?>(null)),
+            new VoidEffectRecordBehavior(_ => ValueTask.CompletedTask),
             Time,
             TimeSpan.Zero,
             debugLabel

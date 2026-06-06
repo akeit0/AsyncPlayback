@@ -28,13 +28,42 @@ internal sealed class SeekLoopRecordBehavior : TimelineRecordBehavior
     }
 
     public override ValueTask EvaluateAsync(
-        RecordEvaluationContext context,
+        Playback playback,
         TimelineRecord record,
         TimeSpan time,
         PlaybackDirection direction
     )
     {
-        return context.Playback.EmitSeekLoopAtAsync(record, time, direction);
+        return EvaluateSeekLoopAsync(playback, record, time, direction);
+    }
+
+    private static async ValueTask EvaluateSeekLoopAsync(
+        Playback playback,
+        TimelineRecord loop,
+        TimeSpan targetTime,
+        PlaybackDirection direction
+    )
+    {
+        var active = playback.HasActiveSeekLoop(loop);
+        var mustRestore = direction == PlaybackDirection.Backward || !active;
+
+        if (mustRestore)
+            playback.RestoreToRecord(loop.Id);
+
+        playback.MoveTimeTo(targetTime);
+
+        if (direction == PlaybackDirection.Backward && targetTime == loop.EndTime)
+            playback.SuppressLoopExitForRecord(loop.FlatIndex);
+
+        playback.EmitSeekLoopTrueAt(loop, targetTime);
+        await playback.RunReadyAsync(playback.CurrentCancellationToken).ConfigureAwait(false);
+
+        playback.SetCurrentRecord(loop.Id);
+        playback.EmitBoundaryReached(
+            loop.Id,
+            Playback.ToBoundaryKind(loop, targetTime),
+            targetTime
+        );
     }
 
     internal override TimelineBoundary? GetCurrentBoundaryPosition(
