@@ -10,7 +10,8 @@ public sealed class Playback
     private Func<Playback, PlaybackTask>? entry;
     private bool started;
     private int cursor = -1;
-    private int? rewriteFrom;
+    private PlaybackMode mode;
+    private int rewriteFrom = -1;
     private int replayConsumeIndex = -1;
     private int replayStopIndex = -1;
 
@@ -43,7 +44,7 @@ public sealed class Playback
     {
         IsForward = true;
         EnsureStarted();
-        if (rewriteFrom != null)
+        if (mode == PlaybackMode.Rewriting)
             return RewriteNext();
 
         var next = FindNextCheckpoint(cursor);
@@ -70,6 +71,7 @@ public sealed class Playback
         var previous = FindPreviousCheckpoint(cursor);
         IsCompleted = false;
         ReplayExisting(previous, target);
+        mode = PlaybackMode.Rewriting;
         rewriteFrom = previous + 1;
         cursor = previous;
         Current = null;
@@ -112,7 +114,7 @@ public sealed class Playback
             PlaybackRecordRole.Call,
             label,
             parent.Depth + 1,
-            parent.CallRecordIndex ?? -1
+            GetDebugParentIndex(parent)
         ).Index;
     }
 
@@ -142,6 +144,7 @@ public sealed class Playback
 
     private void ReplayExisting(int startIndex, int stopIndex)
     {
+        mode = PlaybackMode.Replaying;
         replayConsumeIndex = startIndex + 1;
         replayStopIndex = stopIndex;
 
@@ -158,7 +161,7 @@ public sealed class Playback
 
         runner.MoveNext();
 
-        if (replayStopIndex >= 0)
+        if (mode == PlaybackMode.Replaying)
             throw new InvalidOperationException("Replay did not reach the expected checkpoint.");
     }
 
@@ -247,7 +250,7 @@ public sealed class Playback
         out PlaybackRecord record
     )
     {
-        if (replayStopIndex < 0)
+        if (mode != PlaybackMode.Replaying)
         {
             record = default;
             return false;
@@ -266,6 +269,7 @@ public sealed class Playback
         {
             replayConsumeIndex = -1;
             replayStopIndex = -1;
+            mode = PlaybackMode.Normal;
         }
 
         return true;
@@ -273,9 +277,10 @@ public sealed class Playback
 
     private void TruncateIfRewriting()
     {
-        if (rewriteFrom is not { } index)
+        if (mode != PlaybackMode.Rewriting)
             return;
 
+        var index = rewriteFrom;
         if (index < recordCount)
         {
             Array.Clear(records, index, recordCount - index);
@@ -283,7 +288,13 @@ public sealed class Playback
             Array.Clear(checkpointIdsByRecord, index, recordCount - index);
             recordCount = index;
         }
-        rewriteFrom = null;
+        rewriteFrom = -1;
+        mode = PlaybackMode.Normal;
+    }
+
+    private static int GetDebugParentIndex(IPlaybackRunner parent)
+    {
+        return parent.CurrentRecordIndex ?? parent.CallRecordIndex ?? -1;
     }
 
     private int FindNextCheckpoint(int afterIndex)
@@ -313,5 +324,12 @@ public sealed class Playback
         Array.Resize(ref records, capacity);
         Array.Resize(ref recordRunners, capacity);
         Array.Resize(ref checkpointIdsByRecord, capacity);
+    }
+
+    private enum PlaybackMode
+    {
+        Normal,
+        Rewriting,
+        Replaying,
     }
 }
