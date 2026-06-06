@@ -73,3 +73,66 @@ public interface IPlaybackAwaiter
     bool IsReplaySuspension => false;
     int ReplayOwnerRecordIndex => -1;
 }
+
+[AsyncMethodBuilder(typeof(PlaybackTaskMethodBuilder<>))]
+public readonly struct PlaybackTask<T>
+{
+    private readonly PlaybackPromise<T>? promise;
+    private readonly bool replaySuspended;
+    private readonly int replayOwnerRecordIndex;
+
+    internal PlaybackTask(PlaybackPromise<T> promise)
+    {
+        this.promise = promise;
+        replaySuspended = false;
+        replayOwnerRecordIndex = -1;
+    }
+
+    private PlaybackTask(int ownerRecordIndex)
+    {
+        promise = null;
+        replaySuspended = true;
+        replayOwnerRecordIndex = ownerRecordIndex;
+    }
+
+    internal static PlaybackTask<T> SuspendReplayAt(int ownerRecordIndex) => new(ownerRecordIndex);
+
+    public Awaiter GetAwaiter()
+    {
+        if (promise == null && !replaySuspended)
+            throw new InvalidOperationException("Default PlaybackTask<T> cannot be awaited.");
+
+        return new(promise, replaySuspended, replayOwnerRecordIndex);
+    }
+
+    public readonly struct Awaiter : ICriticalNotifyCompletion, IPlaybackAwaiter
+    {
+        private readonly PlaybackPromise<T>? promise;
+        private readonly bool replaySuspended;
+        private readonly int replayOwnerRecordIndex;
+
+        internal Awaiter(PlaybackPromise<T>? promise, bool replaySuspended, int replayOwnerRecordIndex)
+        {
+            this.promise = promise;
+            this.replaySuspended = replaySuspended;
+            this.replayOwnerRecordIndex = replayOwnerRecordIndex;
+        }
+
+        public bool IsCompleted => !replaySuspended && promise!.IsCompleted;
+        PlaybackPromise? IPlaybackAwaiter.Promise => promise;
+        bool IPlaybackAwaiter.IsReplaySuspension => replaySuspended;
+        int IPlaybackAwaiter.ReplayOwnerRecordIndex => replayOwnerRecordIndex;
+
+        public T GetResult()
+        {
+            if (replaySuspended)
+                throw new InvalidOperationException("Replay suspension cannot complete directly.");
+            return promise!.GetResult();
+        }
+
+        public void OnCompleted(Action continuation) => promise!.AddContinuation(continuation);
+
+        public void UnsafeOnCompleted(Action continuation) =>
+            promise!.AddContinuation(continuation);
+    }
+}

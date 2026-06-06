@@ -13,14 +13,12 @@ internal interface IPlaybackRunner
     void RestoreRecord(int recordIndex);
     void BindRecord(int checkpointId, int recordIndex);
     void MarkCompleted();
-    IPlaybackRunner? FindRunnerForRecord(int recordIndex);
 }
 
 internal sealed class PlaybackRunner<TStateMachine> : IPlaybackRunner
     where TStateMachine : IAsyncStateMachine
 {
     private readonly Playback playback;
-    private readonly PlaybackPromise promise;
     private readonly IPlaybackRunner? parent;
     private IPlaybackRunner[] children = [];
     private int childCount;
@@ -29,10 +27,9 @@ internal sealed class PlaybackRunner<TStateMachine> : IPlaybackRunner
     private TStateMachine current = default!;
     private int nextCheckpointId;
 
-    public PlaybackRunner(Playback playback, PlaybackPromise promise, IPlaybackRunner? parent)
+    public PlaybackRunner(Playback playback, IPlaybackRunner? parent)
     {
         this.playback = playback;
-        this.promise = promise;
         this.parent = parent;
         Depth = parent == null ? 0 : parent.Depth + 1;
         CallRecordIndex = parent == null ? null : playback.AddCall(parent, "Call");
@@ -45,8 +42,8 @@ internal sealed class PlaybackRunner<TStateMachine> : IPlaybackRunner
 
     public void SetInitial(ref TStateMachine stateMachine)
     {
-        initial = stateMachine;
-        current = stateMachine;
+        initial = SnapshotStateMachine(stateMachine);
+        current = SnapshotStateMachine(stateMachine);
     }
 
     public void MoveNext()
@@ -63,14 +60,14 @@ internal sealed class PlaybackRunner<TStateMachine> : IPlaybackRunner
 
     public void RestoreInitial()
     {
-        current = initial;
+        current = SnapshotStateMachine(initial);
         CurrentRecordIndex = null;
     }
 
     public void RestoreRecord(int recordIndex)
     {
         var checkpoint = FindCheckpoint(recordIndex);
-        current = checkpoint.State;
+        current = SnapshotStateMachine(checkpoint.State);
         CurrentRecordIndex = recordIndex;
     }
 
@@ -84,23 +81,23 @@ internal sealed class PlaybackRunner<TStateMachine> : IPlaybackRunner
 
     public int CaptureCheckpoint(ref TStateMachine stateMachine, string label)
     {
-        current = stateMachine;
+        current = SnapshotStateMachine(stateMachine);
         var checkpointId = nextCheckpointId++;
         EnsureCheckpointCapacity(checkpointId + 1);
         ref var checkpoint = ref checkpoints[checkpointId];
-        checkpoint.State = stateMachine;
+        checkpoint.State = SnapshotStateMachine(stateMachine);
         checkpoint.RecordIndex = -1;
         return playback.AddCheckpoint(this, checkpointId, label);
     }
 
     public void CaptureAwait(ref TStateMachine stateMachine)
     {
-        current = stateMachine;
+        current = SnapshotStateMachine(stateMachine);
     }
 
     public void CaptureReplaySuspension(ref TStateMachine stateMachine, int ownerRecordIndex)
     {
-        current = stateMachine;
+        current = SnapshotStateMachine(stateMachine);
         CurrentRecordIndex = ownerRecordIndex;
     }
 
@@ -108,22 +105,6 @@ internal sealed class PlaybackRunner<TStateMachine> : IPlaybackRunner
     {
         if (parent == null)
             playback.OnRootCompleted();
-        promise.TrySetResult();
-    }
-
-    public IPlaybackRunner? FindRunnerForRecord(int recordIndex)
-    {
-        if (HasCheckpoint(recordIndex))
-            return this;
-
-        for (var i = 0; i < childCount; i++)
-        {
-            var child = children[i];
-            if (child.FindRunnerForRecord(recordIndex) is { } runner)
-                return runner;
-        }
-
-        return null;
     }
 
     private CheckpointSlot FindCheckpoint(int recordIndex)
@@ -138,16 +119,15 @@ internal sealed class PlaybackRunner<TStateMachine> : IPlaybackRunner
         throw new InvalidOperationException("Checkpoint record was not found.");
     }
 
-    private bool HasCheckpoint(int recordIndex)
+    private static TStateMachine SnapshotStateMachine(TStateMachine source)
     {
-        for (var i = 0; i < nextCheckpointId; i++)
-        {
-            var checkpoint = checkpoints[i];
-            if (checkpoint.RecordIndex == recordIndex)
-                return true;
-        }
+        if (typeof(TStateMachine).IsValueType)
+            return source;
 
-        return false;
+        if (source == null)
+            throw new InvalidOperationException("State machine is null.");
+
+        return CloneUtility.Clone(source);
     }
 
     private void EnsureChildCapacity()

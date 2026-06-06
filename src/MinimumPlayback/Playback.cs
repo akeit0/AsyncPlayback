@@ -3,6 +3,7 @@ namespace MinimumPlayback;
 public sealed class Playback
 {
     private PlaybackRecord[] records = [];
+    private IPlaybackRunner?[] recordRunners = [];
     private int recordCount;
     private IPlaybackRunner? rootRunner;
     private int cursor = -1;
@@ -33,6 +34,10 @@ public sealed class Playback
             return RewriteNext();
 
         var next = FindNextCheckpoint(cursor);
+        if (next < 0 && !TryRecordNext())
+            return false;
+
+        next = FindNextCheckpoint(cursor);
         if (next < 0)
             return false;
 
@@ -46,8 +51,9 @@ public sealed class Playback
         if (cursor < 0)
             return false;
 
-        rewriteFrom = cursor;
-        cursor--;
+        var previous = FindPreviousCheckpoint(cursor);
+        rewriteFrom = previous + 1;
+        cursor = previous;
         Current = null;
         IsCompleted = false;
         return true;
@@ -68,6 +74,7 @@ public sealed class Playback
             runner.CallRecordIndex
         );
         runner.BindRecord(checkpointId, record.Index);
+        recordRunners[record.Index] = runner;
         return record.Index;
     }
 
@@ -119,6 +126,26 @@ public sealed class Playback
         return true;
     }
 
+    private bool TryRecordNext()
+    {
+        if (IsCompleted)
+            return false;
+
+        IPlaybackRunner runner;
+        if (cursor < 0)
+        {
+            runner = rootRunner!;
+            rootRunner!.RestoreInitial();
+        }
+        else
+        {
+            runner = Restore(records[cursor]);
+        }
+
+        runner.MoveNext();
+        return true;
+    }
+
     private IPlaybackRunner Restore(PlaybackRecord record)
     {
         var runner = GetRunner(record);
@@ -131,7 +158,7 @@ public sealed class Playback
         if (rootRunner == null)
             throw new InvalidOperationException("Playback has no root runner.");
 
-        return rootRunner.FindRunnerForRecord(record.Index)
+        return recordRunners[record.Index]
             ?? throw new InvalidOperationException("Record runner was not found.");
     }
 
@@ -156,6 +183,7 @@ public sealed class Playback
         if (index < recordCount)
         {
             Array.Clear(records, index, recordCount - index);
+            Array.Clear(recordRunners, index, recordCount - index);
             recordCount = index;
         }
         rewriteFrom = null;
@@ -170,11 +198,22 @@ public sealed class Playback
         return -1;
     }
 
+    private int FindPreviousCheckpoint(int beforeIndex)
+    {
+        for (var i = beforeIndex - 1; i >= 0; i--)
+            if (records[i].Role == PlaybackRecordRole.Checkpoint)
+                return i;
+
+        return -1;
+    }
+
     private void EnsureRecordCapacity()
     {
         if (recordCount < records.Length)
             return;
 
-        Array.Resize(ref records, records.Length == 0 ? 8 : records.Length * 2);
+        var capacity = records.Length == 0 ? 8 : records.Length * 2;
+        Array.Resize(ref records, capacity);
+        Array.Resize(ref recordRunners, capacity);
     }
 }

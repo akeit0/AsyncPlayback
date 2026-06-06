@@ -51,6 +51,57 @@ public struct PlaybackTaskMethodBuilder
     }
 }
 
+public struct PlaybackTaskMethodBuilder<T>
+{
+    private PlaybackTaskMethodBuilderCore core;
+    private PlaybackPromise<T>? promise;
+
+    public static PlaybackTaskMethodBuilder<T> Create()
+    {
+        var playback =
+            PlaybackRuntime.CurrentPlayback
+            ?? throw new InvalidOperationException(
+                "PlaybackTask<T> must be created inside a Playback."
+            );
+        var promise = new PlaybackPromise<T>();
+        return new() { core = new(playback, promise), promise = promise };
+    }
+
+    public PlaybackTask<T> Task => new(promise!);
+
+    public void Start<TStateMachine>(ref TStateMachine stateMachine)
+        where TStateMachine : IAsyncStateMachine
+    {
+        core.Start(ref stateMachine);
+    }
+
+    public void SetResult(T result) => core.Complete(promise!, result);
+
+    public void SetException(Exception exception) => core.Fault(exception);
+
+    public void SetStateMachine(IAsyncStateMachine stateMachine) { }
+
+    public void AwaitOnCompleted<TAwaiter, TStateMachine>(
+        ref TAwaiter awaiter,
+        ref TStateMachine stateMachine
+    )
+        where TAwaiter : INotifyCompletion, IPlaybackAwaiter
+        where TStateMachine : IAsyncStateMachine
+    {
+        core.CaptureAwait(ref awaiter, ref stateMachine);
+    }
+
+    public void AwaitUnsafeOnCompleted<TAwaiter, TStateMachine>(
+        ref TAwaiter awaiter,
+        ref TStateMachine stateMachine
+    )
+        where TAwaiter : ICriticalNotifyCompletion, IPlaybackAwaiter
+        where TStateMachine : IAsyncStateMachine
+    {
+        core.CaptureAwait(ref awaiter, ref stateMachine);
+    }
+}
+
 internal sealed class PlaybackTaskMethodBuilderCore
 {
     private readonly Playback playback;
@@ -67,7 +118,7 @@ internal sealed class PlaybackTaskMethodBuilderCore
         where TStateMachine : IAsyncStateMachine
     {
         var parent = PlaybackRuntime.CurrentRunner;
-        var typedRunner = new PlaybackRunner<TStateMachine>(playback, Promise, parent);
+        var typedRunner = new PlaybackRunner<TStateMachine>(playback, parent);
         runner = typedRunner;
         Promise.AttachRunner(runner);
         if (parent == null)
@@ -109,6 +160,12 @@ internal sealed class PlaybackTaskMethodBuilderCore
     {
         runner?.MarkCompleted();
         Promise.TrySetResult();
+    }
+
+    public void Complete<T>(PlaybackPromise<T> promise, T result)
+    {
+        runner?.MarkCompleted();
+        promise.TrySetResult(result);
     }
 
     public void Fault(Exception exception)

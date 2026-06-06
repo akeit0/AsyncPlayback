@@ -1,6 +1,6 @@
 namespace MinimumPlayback;
 
-public sealed class PlaybackPromise
+public class PlaybackPromise
 {
     private Action[] continuations = [];
     private int continuationCount;
@@ -25,21 +25,19 @@ public sealed class PlaybackPromise
 
     internal void TrySetResult()
     {
-        if (completed)
+        if (!TryBeginComplete())
             return;
 
-        completed = true;
-        Flush();
+        Complete();
     }
 
     internal void TrySetException(Exception value)
     {
-        if (completed)
+        if (!TryBeginComplete())
             return;
 
         exception = value;
-        completed = true;
-        Flush();
+        Complete();
     }
 
     internal void GetResult()
@@ -50,7 +48,16 @@ public sealed class PlaybackPromise
             throw exception;
     }
 
-    private void Flush()
+    protected bool TryBeginComplete()
+    {
+        if (completed)
+            return false;
+
+        completed = true;
+        return true;
+    }
+
+    protected void Complete()
     {
         for (var i = 0; i < continuationCount; i++)
             continuations[i]();
@@ -64,5 +71,25 @@ public sealed class PlaybackPromise
             return;
 
         Array.Resize(ref continuations, continuations.Length == 0 ? 4 : continuations.Length * 2);
+    }
+}
+
+public sealed class PlaybackPromise<T> : PlaybackPromise
+{
+    private T? result;
+
+    internal void TrySetResult(T value)
+    {
+        if (!TryBeginComplete())
+            return;
+
+        result = value;
+        Complete();
+    }
+
+    internal new T GetResult()
+    {
+        base.GetResult();
+        return result!;
     }
 }
