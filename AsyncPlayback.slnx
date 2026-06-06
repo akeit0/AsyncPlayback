@@ -3,6 +3,7 @@
         <Project Path="sandbox/ConsoleApp1/ConsoleApp1.csproj" />
         <Project Path="sandbox/ConsoleApp2/ConsoleApp2.csproj" />
         <Project Path="sandbox/ConsoleApp3/ConsoleApp3.csproj" />
+        <Project Path="sandbox/MinimumManual/MinimumManual.csproj" />
         <Project Path="sandbox/MinimumPlaybackSandbox/MinimumPlaybackSandbox.csproj" />
         <Project Path="sandbox/Ui/Ui.csproj" />
     </Folder>

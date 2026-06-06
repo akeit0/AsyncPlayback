@@ -14,6 +14,7 @@ public sealed class Playback
     private int rewriteFrom = -1;
     private int replayConsumeIndex = -1;
     private int replayStopIndex = -1;
+    public int Cursor => cursor;
 
     public ReadOnlySpan<PlaybackRecord> Records => records.AsSpan(0, recordCount);
     public PlaybackRecord? Current { get; private set; }
