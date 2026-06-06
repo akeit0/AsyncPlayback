@@ -106,7 +106,7 @@ public sealed class Playback
         return AddRecord(
             PlaybackRecordRole.Call,
             label,
-            parent.Depth + 1,
+            parent.Depth,
             GetDebugParentIndex(parent)
         ).Index;
     }

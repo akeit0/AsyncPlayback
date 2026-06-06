@@ -101,6 +101,6 @@ static void Dump(Playback playback)
 {
     foreach (var record in playback.Records)
         Console.WriteLine(
-            $"{record.Index}:\t{new string(' ', record.Depth)}{record.Role} {record.Label} depth={record.Depth} parent={record.ParentIndex}"
+            $"{record.Index}:\t{string.Concat(Enumerable.Repeat("| ", record.Depth))}{record.Role} {record.Label} depth={record.Depth} parent={record.ParentIndex}"
         );
 }
