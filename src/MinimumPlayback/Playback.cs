@@ -107,7 +107,7 @@ public sealed class Playback
             PlaybackRecordRole.Call,
             label,
             parent.Depth,
-            GetDebugParentIndex(parent)
+            parent.CallRecordIndex ?? -1
         ).Index;
     }
 
@@ -283,11 +283,6 @@ public sealed class Playback
         }
         rewriteFrom = -1;
         mode = PlaybackMode.Normal;
-    }
-
-    private static int GetDebugParentIndex(IPlaybackRunner parent)
-    {
-        return parent.CurrentRecordIndex ?? parent.CallRecordIndex ?? -1;
     }
 
     private int FindNextCheckpoint(int afterIndex)
