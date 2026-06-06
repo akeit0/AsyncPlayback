@@ -1814,7 +1814,7 @@ public sealed class TransportStepTests
     private static async PlaybackTask EffectStoreScenario(Playback playback, List<string> events)
     {
         var value = await playback.Effect(
-            () =>
+            ct =>
             {
                 events.Add("effect");
                 return ValueTask.FromResult(42);
@@ -1834,7 +1834,7 @@ public sealed class TransportStepTests
     )
     {
         await playback.Effect(
-            () =>
+            ct =>
             {
                 events.Add("effect");
                 timeProvider.Advance(TimeSpan.FromMilliseconds(300));
@@ -1854,7 +1854,7 @@ public sealed class TransportStepTests
     )
     {
         await playback.Effect(
-            () =>
+            ct =>
             {
                 events.Add("effect");
                 timeProvider.Advance(TimeSpan.FromMilliseconds(100));
@@ -1879,7 +1879,7 @@ public sealed class TransportStepTests
         if (playback.CurrentDirection == PlaybackDirection.Forward)
         {
             await playback.Effect(
-                () =>
+                ct =>
                 {
                     events.Add("effect");
                     return ValueTask.CompletedTask;
@@ -1902,14 +1902,14 @@ public sealed class TransportStepTests
     )
     {
         await playback.Effect(
-            () =>
+            ct =>
             {
                 events.Add("effect");
                 return ValueTask.CompletedTask;
             },
-            async () =>
+            async ct =>
             {
-                await Task.Delay(10);
+                await Task.Delay(10, ct);
                 events.Add("revert");
             },
             "effect"
@@ -1949,10 +1949,10 @@ public sealed class TransportStepTests
     )
     {
         await playback.Effect(
-            () => ValueTask.CompletedTask,
-            async () =>
+            ct => ValueTask.CompletedTask,
+            async ct =>
             {
-                await Task.Delay(10);
+                await Task.Delay(10, ct);
                 events.Add("restore:" + state);
             },
             "restore"
@@ -1967,7 +1967,7 @@ public sealed class TransportStepTests
         try
         {
             await playback.Effect<int>(
-                () => ValueTask.FromException<int>(new InvalidOperationException("boom")),
+                ct => ValueTask.FromException<int>(new InvalidOperationException("boom")),
                 "failing"
             );
         }
@@ -1987,9 +1987,9 @@ public sealed class TransportStepTests
         try
         {
             await playback.Effect(
-                async cancellationToken =>
+                async ct =>
                 {
-                    await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
+                    await Task.Delay(TimeSpan.FromSeconds(1), ct);
                     events.Add("completed");
                 },
                 "cancel"

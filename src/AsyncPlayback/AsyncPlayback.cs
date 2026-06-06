@@ -240,26 +240,6 @@ public sealed partial class Playback
         return new(promise);
     }
 
-    public PlaybackTask Effect(Func<ValueTask> effect, string debugLabel = "Effect")
-    {
-        if (effect == null)
-            throw new ArgumentNullException(nameof(effect));
-
-        return Effect(_ => effect(), debugLabel);
-    }
-
-    public PlaybackTask Effect(
-        Func<ValueTask> effect,
-        Func<ValueTask>? revert,
-        string debugLabel = "Effect"
-    )
-    {
-        if (effect == null)
-            throw new ArgumentNullException(nameof(effect));
-
-        return Effect(_ => effect(), revert == null ? null : _ => revert(), debugLabel);
-    }
-
     public PlaybackTask Effect(
         Func<CancellationToken, ValueTask> effect,
         string debugLabel = "Effect"
@@ -303,14 +283,6 @@ public sealed partial class Playback
 
         StartEffect(record.Id, promise);
         return new(promise);
-    }
-
-    public PlaybackTask<T> Effect<T>(Func<ValueTask<T>> effect, string debugLabel = "Effect")
-    {
-        if (effect == null)
-            throw new ArgumentNullException(nameof(effect));
-
-        return Effect(_ => effect(), debugLabel);
     }
 
     public PlaybackTask<T> Effect<T>(
