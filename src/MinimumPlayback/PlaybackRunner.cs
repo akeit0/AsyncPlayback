@@ -11,6 +11,7 @@ internal interface IPlaybackRunner
     void MoveNext();
     void RestoreInitial();
     void RestoreCheckpoint(int checkpointId, int recordIndex);
+    void ResumeContinuation(int continuationId);
     void MarkCompleted();
 }
 
@@ -23,9 +24,11 @@ internal sealed class PlaybackRunner<TStateMachine> : IPlaybackRunner
     private IPlaybackRunner[] children = [];
     private int childCount;
     private TStateMachine[] checkpoints = [];
+    private TStateMachine[] continuations = [];
     private TStateMachine initial = default!;
     private TStateMachine current = default!;
     private int nextCheckpointId;
+    private int continuationCount;
 
     public PlaybackRunner(Playback playback, PlaybackPromise promise, IPlaybackRunner? parent)
     {
@@ -78,13 +81,26 @@ internal sealed class PlaybackRunner<TStateMachine> : IPlaybackRunner
         current = SnapshotStateMachine(stateMachine);
         var checkpointId = nextCheckpointId++;
         EnsureCheckpointCapacity(checkpointId + 1);
-        checkpoints[checkpointId] = SnapshotStateMachine(stateMachine);
-        return playback.AddCheckpoint(this, checkpointId, label);
+        checkpoints[checkpointId] = current;
+        var recordIndex = playback.AddCheckpoint(this, checkpointId, label);
+        CurrentRecordIndex = recordIndex;
+        return recordIndex;
     }
 
-    public void CaptureAwait(ref TStateMachine stateMachine)
+    public int CaptureAwait(ref TStateMachine stateMachine)
     {
-        current = SnapshotStateMachine(stateMachine);
+        var awaitState = SnapshotStateMachine(stateMachine);
+        current = awaitState;
+        var continuationId = continuationCount++;
+        EnsureContinuationCapacity(continuationId + 1);
+        continuations[continuationId] = awaitState;
+        return continuationId;
+    }
+
+    public void ResumeContinuation(int continuationId)
+    {
+        current = SnapshotStateMachine(continuations[continuationId]);
+        MoveNext();
     }
 
     public void CaptureReplaySuspension(ref TStateMachine stateMachine, int ownerRecordIndex)
@@ -127,5 +143,16 @@ internal sealed class PlaybackRunner<TStateMachine> : IPlaybackRunner
         while (capacity < required)
             capacity *= 2;
         Array.Resize(ref checkpoints, capacity);
+    }
+
+    private void EnsureContinuationCapacity(int required)
+    {
+        if (required <= continuations.Length)
+            return;
+
+        var capacity = continuations.Length == 0 ? 4 : continuations.Length;
+        while (capacity < required)
+            capacity *= 2;
+        Array.Resize(ref continuations, capacity);
     }
 }

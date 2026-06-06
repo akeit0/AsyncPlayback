@@ -7,12 +7,22 @@ public sealed class Playback
     private int[] checkpointIdsByRecord = [];
     private int recordCount;
     private IPlaybackRunner? rootRunner;
+    private Func<Playback, PlaybackTask>? entry;
+    private bool started;
     private int cursor = -1;
     private int? rewriteFrom;
+    private int replayConsumeIndex = -1;
+    private int replayStopIndex = -1;
 
     public ReadOnlySpan<PlaybackRecord> Records => records.AsSpan(0, recordCount);
     public PlaybackRecord? Current { get; private set; }
     public bool IsCompleted { get; private set; }
+    public bool IsForward { get; private set; } = true;
+
+    public static Playback Create(Func<Playback, PlaybackTask> entry)
+    {
+        return new() { entry = entry };
+    }
 
     public static Playback Start(Func<Playback, PlaybackTask> entry)
     {
@@ -31,6 +41,8 @@ public sealed class Playback
 
     public bool TryMoveNext()
     {
+        IsForward = true;
+        EnsureStarted();
         if (rewriteFrom != null)
             return RewriteNext();
 
@@ -49,14 +61,18 @@ public sealed class Playback
 
     public bool TryMoveBack()
     {
+        EnsureStarted();
+
         if (cursor < 0)
             return false;
-
+        IsForward = false;
+        var target = cursor;
         var previous = FindPreviousCheckpoint(cursor);
+        IsCompleted = false;
+        ReplayExisting(previous, target);
         rewriteFrom = previous + 1;
         cursor = previous;
         Current = null;
-        IsCompleted = false;
         return true;
     }
 
@@ -67,6 +83,13 @@ public sealed class Playback
 
     internal int AddCheckpoint(IPlaybackRunner runner, int checkpointId, string label)
     {
+        if (TryConsumeReplayRecord(PlaybackRecordRole.Checkpoint, label, out var replayRecord))
+        {
+            recordRunners[replayRecord.Index] = runner;
+            checkpointIdsByRecord[replayRecord.Index] = checkpointId + 1;
+            return replayRecord.Index;
+        }
+
         TruncateIfRewriting();
         var record = AddRecord(
             PlaybackRecordRole.Checkpoint,
@@ -81,12 +104,15 @@ public sealed class Playback
 
     internal int AddCall(IPlaybackRunner parent, string label)
     {
+        if (TryConsumeReplayRecord(PlaybackRecordRole.Call, label, out var replayRecord))
+            return replayRecord.Index;
+
         TruncateIfRewriting();
         return AddRecord(
             PlaybackRecordRole.Call,
             label,
             parent.Depth + 1,
-            parent.CurrentRecordIndex ?? -1
+            parent.CallRecordIndex ?? -1
         ).Index;
     }
 
@@ -97,8 +123,43 @@ public sealed class Playback
 
     private void StartCore(Func<Playback, PlaybackTask> entry)
     {
+        this.entry = entry;
+        started = true;
         using var scope = PlaybackRuntime.Push(this, null);
         _ = entry(this);
+    }
+
+    private void EnsureStarted()
+    {
+        if (started)
+            return;
+
+        if (entry == null)
+            throw new InvalidOperationException("Playback has no entry.");
+
+        StartCore(entry);
+    }
+
+    private void ReplayExisting(int startIndex, int stopIndex)
+    {
+        replayConsumeIndex = startIndex + 1;
+        replayStopIndex = stopIndex;
+
+        IPlaybackRunner runner;
+        if (startIndex < 0)
+        {
+            runner = rootRunner!;
+            rootRunner!.RestoreInitial();
+        }
+        else
+        {
+            runner = Restore(records[startIndex]);
+        }
+
+        runner.MoveNext();
+
+        if (replayStopIndex >= 0)
+            throw new InvalidOperationException("Replay did not reach the expected checkpoint.");
     }
 
     private bool RewriteNext()
@@ -178,6 +239,36 @@ public sealed class Playback
         var record = new PlaybackRecord(recordCount, role, label, depth, parentIndex);
         records[recordCount++] = record;
         return record;
+    }
+
+    private bool TryConsumeReplayRecord(
+        PlaybackRecordRole role,
+        string label,
+        out PlaybackRecord record
+    )
+    {
+        if (replayStopIndex < 0)
+        {
+            record = default;
+            return false;
+        }
+
+        if (replayConsumeIndex < 0 || replayConsumeIndex > replayStopIndex)
+            throw new InvalidOperationException("Replay consumed past the expected checkpoint.");
+
+        record = records[replayConsumeIndex++];
+        if (record.Role != role || record.Label != label)
+            throw new InvalidOperationException(
+                "Replay record does not match the existing timeline."
+            );
+
+        if (record.Index == replayStopIndex)
+        {
+            replayConsumeIndex = -1;
+            replayStopIndex = -1;
+        }
+
+        return true;
     }
 
     private void TruncateIfRewriting()

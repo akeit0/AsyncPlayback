@@ -152,8 +152,7 @@ internal sealed class PlaybackTaskMethodBuilderCore
 
         var promise =
             awaiter.Promise ?? throw new InvalidOperationException("Awaiter is missing a promise.");
-        typedRunner.CaptureAwait(ref stateMachine);
-        promise.AddContinuation(typedRunner.MoveNext);
+        promise.AddContinuation(typedRunner, typedRunner.CaptureAwait(ref stateMachine));
     }
 
     public void Complete()

@@ -6,4 +6,6 @@ public readonly partial struct PlaybackTask
     {
         return PlaybackRuntime.CurrentPlayback!.Checkpoint(label);
     }
+
+    public static bool IsForward => PlaybackRuntime.CurrentPlayback!.IsForward;
 }

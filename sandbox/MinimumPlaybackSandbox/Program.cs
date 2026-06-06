@@ -1,6 +1,33 @@
 using MinimumPlayback;
 using static MinimumPlayback.PlaybackTask;
 
+var playback = Playback.Create(ForScenario);
+
+Console.WriteLine("-- forward --");
+while (playback.TryMoveNext())
+{
+    Console.WriteLine("th");
+}
+
+Console.WriteLine("-- back --");
+while (playback.TryMoveBack())
+{
+    Console.WriteLine("th");
+}
+Console.WriteLine("-- forward --");
+while (playback.TryMoveNext())
+{
+    Console.WriteLine("th");
+}
+static async PlaybackTask ForScenario(Playback playback)
+{
+    for (var i = 0; i < 5; i++)
+    {
+        Console.Write((PlaybackTask.IsForward ? $"-> {i}++" : $"{i} <-"));
+        await Checkpoint();
+    }
+}
+
 var playback1 = Playback.Start(playback => Scenario(playback, 6));
 var playback2 = Playback.Start(playback => Scenario(playback, 4));
 

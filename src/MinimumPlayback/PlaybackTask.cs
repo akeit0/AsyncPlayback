@@ -58,10 +58,15 @@ public readonly partial struct PlaybackTask
             promise!.GetResult();
         }
 
-        public void OnCompleted(Action continuation) => promise!.AddContinuation(continuation);
+        public void OnCompleted(Action continuation) =>
+            throw new InvalidOperationException(
+                "PlaybackTask can only be awaited by PlaybackTask."
+            );
 
         public void UnsafeOnCompleted(Action continuation) =>
-            promise!.AddContinuation(continuation);
+            throw new InvalidOperationException(
+                "PlaybackTask can only be awaited by PlaybackTask."
+            );
     }
 }
 
@@ -134,9 +139,14 @@ public readonly struct PlaybackTask<T>
             return promise!.GetResult();
         }
 
-        public void OnCompleted(Action continuation) => promise!.AddContinuation(continuation);
+        public void OnCompleted(Action continuation) =>
+            throw new InvalidOperationException(
+                "PlaybackTask can only be awaited by PlaybackTask."
+            );
 
         public void UnsafeOnCompleted(Action continuation) =>
-            promise!.AddContinuation(continuation);
+            throw new InvalidOperationException(
+                "PlaybackTask can only be awaited by PlaybackTask."
+            );
     }
 }
