@@ -10,6 +10,317 @@ checkpoint restore, nested async calls, typed return values, call-end stops, and
 backward movement.  It has no virtual time, no scheduler, no `ValueTask`, no
 general-purpose `Task` semantics, and no user data store.
 
+## A Small Example
+
+Consider this playback program:
+
+```csharp
+using MinimumPlayback;
+using static MinimumPlayback.PlaybackTask;
+
+var playback = Playback.Create(_ => Scenario());
+
+Console.WriteLine("-- forward --");
+while (playback.TryMoveNext())
+    Console.WriteLine("th");
+
+Console.WriteLine("-- back --");
+while (playback.TryMoveBack())
+    Console.WriteLine("th");
+
+static async PlaybackTask Scenario()
+{
+    for (var i = 0; i < 5; i++)
+    {
+        Console.Write(i);
+        await Checkpoint(i.ToString());
+    }
+}
+```
+
+The output is:
+
+```text
+-- forward --
+0th
+1th
+2th
+3th
+4th
+-- back --
+4th
+3th
+2th
+1th
+0th
+```
+
+This is the behavior the project exists to study.  Backward movement is not C#
+running in reverse.  It is forward execution from an earlier state-machine
+snapshot.
+
+Forward movement restores the current stop, executes the generated
+`MoveNext()` until the next stop, then appends or advances to that stop.
+Backward movement restores the previous stop, executes the same generated
+`MoveNext()` forward until the current stop is reproduced, consumes that
+current stop, and leaves the cursor at the previous stop.
+
+## State Machine Shape
+
+The compiler lowers the loop into one state machine.  The exact generated names
+do not matter.  The important part is where `MoveNext()` resumes.
+
+```csharp
+private struct ScenarioStateMachine : IAsyncStateMachine
+{
+    public int state;
+    public PlaybackTaskMethodBuilder builder;
+
+    private int i;
+    private CheckpointAwaitable.Awaiter checkpointAwaiter;
+
+    private void MoveNext()
+    {
+        if (state != 0)
+            i = 0;
+        else
+        {
+            var awaiter = checkpointAwaiter;
+            checkpointAwaiter = default;
+            state = -1;
+            awaiter.GetResult();
+            i++;
+        }
+
+        if (i < 5)
+        {
+            Console.Write(i);
+            var awaiter = PlaybackTask.Checkpoint().GetAwaiter();
+            if (!awaiter.IsCompleted)
+            {
+                state = 0;
+                checkpointAwaiter = awaiter;
+                builder.AwaitUnsafeOnCompleted(ref awaiter, ref this);
+                return;
+            }
+        }
+
+        state = -2;
+        builder.SetResult();
+    }
+}
+```
+
+The important fields are:
+
+```text
+state              resume point
+i                  loop local
+checkpointAwaiter  awaiter field used across suspension
+builder            custom PlaybackTask builder
+```
+
+The generated method has two areas that matter for this example:
+
+```text
+Entry area:
+  i = 0
+  Console.Write(i)
+  await Checkpoint()
+  capture stop with state=0, i=0
+
+Resume area:
+  checkpointAwaiter.GetResult()
+  i++
+  Console.Write(i)
+  await Checkpoint()
+  capture stop with state=0, i=current
+```
+
+After a full forward run, the stored stops are:
+
+```text
+record 0 -> stop0(state=0, i=0)
+record 1 -> stop1(state=0, i=1)
+record 2 -> stop2(state=0, i=2)
+record 3 -> stop3(state=0, i=3)
+record 4 -> stop4(state=0, i=4)
+```
+
+The write happens before the stop is captured.  Restoring `stop0` and running
+`MoveNext()` continues after checkpoint `0`; it prints `1`, not `0`.
+
+## State-Machine Transitions
+
+For this loop, the meaningful state is the pair:
+
+```text
+(state, i)
+```
+
+`state` is the compiler resume point.  `i` is the user loop local.  The stored
+playback stops are snapshots of that pair.
+
+```text
+initial = (state=-1, i=undefined)
+stop0   = (state=0,  i=0)
+stop1   = (state=0,  i=1)
+stop2   = (state=0,  i=2)
+stop3   = (state=0,  i=3)
+stop4   = (state=0,  i=4)
+done    = (state=-2, i=5)
+```
+
+The generated state-machine transition is always forward:
+
+```text
+initial -> stop0
+stop0   -> stop1
+stop1   -> stop2
+stop2   -> stop3
+stop3   -> stop4
+stop4   -> done
+```
+
+Forward and backward movement use the same generated transition arrows:
+
+```text
+TryMoveNext from cursor 2:
+  restore stop2
+  execute stop2 -> stop3
+  print 3
+  cursor becomes 3
+
+TryMoveBack from cursor 3:
+  restore stop2
+  execute stop2 -> stop3
+  print 3
+  consume existing stop3
+  cursor becomes 2
+```
+
+So both operations execute the same state-machine transition:
+
+```text
+stop2(state=0, i=2) -> stop3(state=0, i=3)
+```
+
+Direction changes timeline bookkeeping, not the generated `MoveNext()`
+direction.
+
+```mermaid
+flowchart TD
+    I["initial<br/>(state=-1)"]
+    S0["stop0<br/>(state=0, i=0)"]
+    S1["stop1<br/>(state=0, i=1)"]
+    S2["stop2<br/>(state=0, i=2)"]
+    S3["stop3<br/>(state=0, i=3)"]
+    S4["stop4<br/>(state=0, i=4)"]
+    D["done<br/>(state=-2, i=5)"]
+
+    I -->|"MoveNext entry<br/>write 0"| S0
+    S0 -->|"MoveNext resume<br/>i++ ; write 1"| S1
+    S1 -->|"MoveNext resume<br/>i++ ; write 2"| S2
+    S2 -->|"MoveNext resume<br/>i++ ; write 3"| S3
+    S3 -->|"MoveNext resume<br/>i++ ; write 4"| S4
+    S4 -->|"MoveNext resume<br/>i++ ; complete"| D
+
+    S0 -. "back: replay initial to stop0<br/>cursor becomes -1" .-> I
+    S1 -. "back: replay stop0 to stop1<br/>cursor becomes 0" .-> S0
+    S2 -. "back: replay stop1 to stop2<br/>cursor becomes 1" .-> S1
+    S3 -. "back: replay stop2 to stop3<br/>cursor becomes 2" .-> S2
+    S4 -. "back: replay stop3 to stop4<br/>cursor becomes 3" .-> S3
+```
+
+Read each solid arrow as a forward `MoveNext` transition.  Read each dotted
+arrow upward as a `MoveBack` operation: it restores the previous stop, executes
+the same generated transition forward to reproduce the current stop, consumes
+that existing stop, then leaves the cursor at the previous stop.
+
+## Nested Call Example
+
+Now consider a nested typed task:
+
+```csharp
+static async PlaybackTask Scenario()
+{
+    await Checkpoint("start");
+    var value = await Fib(2);
+    await Checkpoint($"end={value}");
+}
+
+static async PlaybackTask<int> Fib(int n)
+{
+    await Checkpoint($"fib({n})");
+
+    if (n <= 1)
+        return n;
+
+    var left = await Fib(n - 1);
+    var right = await Fib(n - 2);
+    return left + right;
+}
+```
+
+The important point is that `Fib(2)` is not treated as an opaque normal task.
+It becomes a nested playback runner with its own compiler-generated async state
+machine.
+
+The resulting timeline is shaped like this:
+
+```text
+Checkpoint start
+Call In                 // enter Fib(2)
+  Checkpoint fib(2)
+  Call In               // enter Fib(1)
+    Checkpoint fib(1)
+  CallEnd Out           // Fib(1) returned
+  Call In               // enter Fib(0)
+    Checkpoint fib(0)
+  CallEnd Out           // Fib(0) returned
+CallEnd Out             // Fib(2) returned
+Checkpoint end=1
+```
+
+Only `Checkpoint` and `CallEnd` are movement stops.  `Call` records are
+structural.  They make the debug hierarchy visible, but movement never lands on
+them.
+
+Forward movement runs from one stop to the next:
+
+```text
+start -> fib(2) -> fib(1) -> CallEnd -> fib(0) -> CallEnd -> CallEnd -> end=1
+```
+
+This is the central idea of the whole project:
+
+```text
+move back = restore previous stop + replay forward to current stop
+```
+
+## High-Level Shape
+
+```mermaid
+flowchart TD
+    UserCode["User async method<br/>PlaybackTask / PlaybackTask<T>"]
+    Compiler["C# compiler async lowering<br/>IAsyncStateMachine.MoveNext"]
+    Builder["PlaybackTaskMethodBuilder<br/>Start / AwaitOnCompleted / SetResult"]
+    Runner["PlaybackRunner<TStateMachine><br/>current, initial, stops[]"]
+    Promise["PlaybackPromise<br/>result, completion, parent stop"]
+    Timeline["Playback timeline<br/>records[], recordRunners[], stopIdsByRecord[]"]
+
+    UserCode --> Compiler
+    Compiler --> Builder
+    Builder --> Runner
+    Builder --> Promise
+    Runner --> Timeline
+    Promise --> Runner
+    Timeline --> Runner
+```
+
+The compiler-generated state machine is the executable state.  The timeline is
+an index over recorded movement/debug records and runner-local stop snapshots.
+
 ## Core Idea
 
 C# already compiles an `async` method into a state machine.  That state machine
@@ -39,6 +350,21 @@ record index -> runner-local stop id
 
 Movement restores a runner stop, runs `MoveNext()`, and either records new
 records or consumes existing records during replay.
+
+```mermaid
+flowchart LR
+    RecordIndex["record index"]
+    Record["records[index]<br/>role, label, depth, parent"]
+    RunnerMap["recordRunners[index]"]
+    StopMap["stopIdsByRecord[index] - 1"]
+    RunnerStop["runner.stops[stopId]<br/>state-machine snapshot"]
+
+    RecordIndex --> Record
+    RecordIndex --> RunnerMap
+    RecordIndex --> StopMap
+    RunnerMap --> RunnerStop
+    StopMap --> RunnerStop
+```
 
 ## C# Async Lowering
 
@@ -99,6 +425,28 @@ SetException(...)
 
 Those callbacks are the only place where `MinimumPlayback` integrates with C#
 async execution.
+
+```mermaid
+sequenceDiagram
+    participant Compiler as Compiler-generated MoveNext
+    participant Builder as PlaybackTaskMethodBuilder
+    participant Runner as PlaybackRunner
+    participant Playback as Playback
+    participant Promise as PlaybackPromise
+
+    Compiler->>Builder: Start(ref stateMachine)
+    Builder->>Runner: create runner and MoveNext()
+    Compiler->>Builder: AwaitOnCompleted(ref awaiter, ref stateMachine)
+    alt await Checkpoint
+        Builder->>Runner: CaptureCheckpoint(ref stateMachine)
+        Runner->>Playback: AddCheckpoint(runner, stopId, label)
+    else await child PlaybackTask
+        Builder->>Runner: CaptureAwait(ref parentStateMachine)
+        Builder->>Promise: AddContinuation(parentRunner, stopId)
+    end
+    Compiler->>Builder: SetResult(...)
+    Builder->>Promise: TrySetResult(...)
+```
 
 ## Runtime Scope
 
@@ -229,6 +577,18 @@ CallEnd     child completion boundary; movement stop
 Only `Checkpoint` and `CallEnd` are stops.  `Call` is structural and is not a
 movement target.
 
+```mermaid
+flowchart TD
+    Timeline["Timeline records"]
+    Checkpoint["Checkpoint<br/>movement stop<br/>has runner + stop id"]
+    Call["Call<br/>structural only<br/>no stop id"]
+    CallEnd["CallEnd<br/>movement stop<br/>has runner + stop id"]
+
+    Timeline --> Checkpoint
+    Timeline --> Call
+    Timeline --> CallEnd
+```
+
 The parent rules are:
 
 ```text
@@ -300,6 +660,21 @@ record is Checkpoint
 The difference is that a checkpoint restore sets `CurrentRecordIndex`, while a
 call-end resume continues the parent from an await snapshot.
 
+```mermaid
+sequenceDiagram
+    participant Child as Child runner
+    participant Promise as Child promise
+    participant Parent as Parent runner
+    participant Playback as Playback timeline
+
+    Child->>Promise: SetResult(value)
+    Promise->>Parent: CompleteAwait(parentStopId, childCallRecordIndex)
+    Parent->>Playback: AddCallEnd(parentRunner, parentStopId, childCallRecordIndex)
+    Note over Playback: Cursor can stop here before parent resumes
+    Playback->>Parent: ResumeStop(parentStopId)
+    Parent->>Parent: MoveNext()
+```
+
 ## Forward Movement
 
 `TryMoveNext()` is lazy.  `Playback.Create(...)` does not execute user code.
@@ -350,6 +725,30 @@ cursor is CallEnd
 
 When user code records a checkpoint or call-end, it appends a new stop record in
 normal mode.
+
+```mermaid
+flowchart TD
+    Start["TryMoveNext"]
+    Ensure["EnsureStarted"]
+    Rewriting{"mode == Rewriting?"}
+    Truncate["Truncate timeline from rewriteFrom"]
+    Existing{"Next stop already recorded?"}
+    Completed{"IsCompleted?"}
+    Prepare["Prepare runner from cursor"]
+    Move["Move runner from cursor"]
+    Find["Find next stop"]
+    Cursor["cursor = next stop"]
+    False["return false"]
+
+    Start --> Ensure --> Rewriting
+    Rewriting -- yes --> Truncate --> Prepare
+    Rewriting -- no --> Existing
+    Existing -- yes --> Cursor
+    Existing -- no --> Completed
+    Completed -- yes --> False
+    Completed -- no --> Prepare
+    Prepare --> Move --> Find --> Cursor
+```
 
 ## Backward Movement
 
@@ -413,6 +812,22 @@ existing timeline records from `previous + 1` through `target`.
 If replay does not consume exactly to `target`, the timeline and state-machine
 replay have diverged and the runtime throws.
 
+```mermaid
+flowchart TD
+    Start["TryMoveBack"]
+    HasCursor{"cursor >= 0?"}
+    Previous["previous = FindPreviousStop(cursor)"]
+    Direction["IsForward = false<br/>IsCompleted = false"]
+    Replay["ReplayExisting(previous, cursor)"]
+    Rewrite["mode = Rewriting<br/>rewriteFrom = previous + 1"]
+    MoveCursor["cursor = previous<br/>Current = null"]
+    False["return false"]
+
+    Start --> HasCursor
+    HasCursor -- no --> False
+    HasCursor -- yes --> Previous --> Direction --> Replay --> Rewrite --> MoveCursor
+```
+
 ## Existing-Record Replay
 
 During `PlaybackMode.Replaying`, `AddCheckpoint`, `AddCall`, and `AddCallEnd`
@@ -437,6 +852,23 @@ replayStopIndex = -1
 
 This makes backward movement deterministic: moving back from a stop proves that
 the segment can be replayed forward to that same stop.
+
+```mermaid
+flowchart LR
+    Existing["existing records"]
+    ReplayIndex["replayConsumeIndex"]
+    Operation["record operation<br/>AddCheckpoint/AddCall/AddCallEnd"]
+    Match{"role + label match?"}
+    Consume["consume record<br/>replayConsumeIndex++"]
+    Error["throw"]
+    Done{"record.Index == replayStopIndex?"}
+    Normal["mode = Normal"]
+
+    Existing --> ReplayIndex --> Operation --> Match
+    Match -- no --> Error
+    Match -- yes --> Consume --> Done
+    Done -- yes --> Normal
+```
 
 ## Rewrite After Back
 
@@ -495,6 +927,22 @@ parent continuation checkpoint
 
 Without `CallEnd`, a child completion and parent continuation can collapse into
 one movement step.  That makes move-back ambiguous around await boundaries.
+
+```mermaid
+flowchart TD
+    Parent["Parent runner"]
+    Await["await Child()"]
+    ParentStop["Capture parent await stop"]
+    Child["Child runner"]
+    ChildCheckpoint["Child checkpoint stops"]
+    ChildDone["Child SetResult"]
+    CallEnd["CallEnd stop"]
+    ParentResume["Resume parent await stop"]
+
+    Parent --> Await --> ParentStop
+    Await --> Child --> ChildCheckpoint --> ChildDone
+    ChildDone --> CallEnd --> ParentResume
+```
 
 ## Typed Return Values
 
