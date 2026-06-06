@@ -11,6 +11,22 @@ internal sealed class DelayRecordBehavior : TimelineRecordBehavior
         builder.AddEnd(record);
     }
 
+    public override void AddEvaluationEntries(
+        in TimelineRecord record,
+        TimelineEvaluationBuilder builder
+    )
+    {
+        builder.AddPoint(record.EndTime);
+
+        if (record.Duration > TimeSpan.Zero)
+            builder.AddRange(
+                record.StartTime,
+                record.EndTime,
+                PlaybackDirection.Backward,
+                includeEnd: false
+            );
+    }
+
     public override bool IsReplayMatch(
         in TimelineRecord record,
         in TimelineRecordCreateRequest request
@@ -81,11 +97,6 @@ internal sealed class DelayRecordBehavior : TimelineRecordBehavior
     )
     {
         return GetTimedBoundaryPosition(record, time);
-    }
-
-    internal override bool HasTimedBoundaryAt(in TimelineRecord record, TimeSpan time)
-    {
-        return HasTimedBoundary(record, time);
     }
 
     internal override void AddTimedBoundaryTimes(

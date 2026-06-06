@@ -15,7 +15,6 @@ public struct TimelineRecord
                 nameof(duration),
                 "Duration must be non-negative."
             );
-
         Id = id;
         Behavior = behavior ?? throw new ArgumentNullException(nameof(behavior));
         StartTime = startTime;
@@ -35,14 +34,12 @@ public struct TimelineRecord
     public TimeSpan Duration { get; set; }
     public TimeSpan EndTime => StartTime + Duration;
     public string DebugLabel { get; }
-
     public int? ParentIndex { get; set; }
     public RecordId? ParentId { get; set; }
     public int Depth { get; set; }
     public int FlatIndex { get; set; }
     internal IPlaybackRunner? OwnerRunner { get; set; }
     internal TimelineCheckpoint? EntryCheckpoint { get; set; }
-
     public CheckpointRecordKind CheckpointKind => CheckpointBehavior.CheckpointKind;
 
     public static TimelineRecord Checkpoint(
@@ -50,68 +47,35 @@ public struct TimelineRecord
         TimeSpan time,
         string debugLabel,
         CheckpointRecordKind checkpointKind
-    )
-    {
-        return new(
-            id,
-            new CheckpointRecordBehavior(checkpointKind),
-            time,
-            TimeSpan.Zero,
-            debugLabel
-        );
-    }
+    ) => new(id, new CheckpointRecordBehavior(checkpointKind), time, TimeSpan.Zero, debugLabel);
 
     public static TimelineRecord Delay(
         RecordId id,
         TimeSpan startTime,
         TimeSpan duration,
         string debugLabel
-    )
-    {
-        return new(id, new DelayRecordBehavior(), startTime, duration, debugLabel);
-    }
+    ) => new(id, new DelayRecordBehavior(), startTime, duration, debugLabel);
 
     public static TimelineRecord Effect(
         RecordId id,
         TimeSpan startTime,
         string debugLabel,
         Func<CancellationToken, ValueTask> executeAsync
-    )
-    {
-        return new(
-            id,
-            new VoidEffectRecordBehavior(executeAsync),
-            startTime,
-            TimeSpan.Zero,
-            debugLabel
-        );
-    }
+    ) => new(id, new VoidEffectRecordBehavior(executeAsync), startTime, TimeSpan.Zero, debugLabel);
 
     public static TimelineRecord Effect<T>(
         RecordId id,
         TimeSpan startTime,
         string debugLabel,
         Func<CancellationToken, ValueTask<T>> executeAsync
-    )
-    {
-        return new(
-            id,
-            new EffectRecordBehavior<T>(executeAsync),
-            startTime,
-            TimeSpan.Zero,
-            debugLabel
-        );
-    }
+    ) => new(id, new EffectRecordBehavior<T>(executeAsync), startTime, TimeSpan.Zero, debugLabel);
 
     public static TimelineRecord SeekLoop(
         RecordId id,
         TimeSpan startTime,
         TimeSpan duration,
         string debugLabel
-    )
-    {
-        return new(id, new SeekLoopRecordBehavior(), startTime, duration, debugLabel);
-    }
+    ) => new(id, new SeekLoopRecordBehavior(), startTime, duration, debugLabel);
 
     internal static TimelineRecord Call(
         RecordId id,
@@ -119,16 +83,14 @@ public struct TimelineRecord
         string debugLabel,
         IPlaybackRunner parentRunner,
         IPlaybackRunner childRunner
-    )
-    {
-        return new(
+    ) =>
+        new(
             id,
             new CallRecordBehavior(parentRunner, childRunner),
             startTime,
             TimeSpan.Zero,
             debugLabel
         );
-    }
 
     public static TimelineRecord Create(
         RecordId id,
@@ -136,42 +98,16 @@ public struct TimelineRecord
         TimeSpan startTime,
         TimeSpan duration,
         string debugLabel
-    )
-    {
-        return new(id, behavior, startTime, duration, debugLabel);
-    }
+    ) => new(id, behavior, startTime, duration, debugLabel);
 
-    public bool Contains(TimeSpan time, bool includeEnd = true)
-    {
-        return includeEnd
-            ? StartTime <= time && time <= EndTime
-            : StartTime <= time && time < EndTime;
-    }
-
-    public TimelineRecordInfo ToInfo()
-    {
-        return Behavior.ToInfo(this);
-    }
-
-    public bool IsCheckpoint(CheckpointRecordKind kind)
-    {
-        return Behavior is CheckpointRecordBehavior checkpoint && checkpoint.CheckpointKind == kind;
-    }
+    public TimelineRecordInfo ToInfo() => Behavior.ToInfo(this);
 
     internal EffectRecordBehavior EffectBehavior => GetEffectBehavior();
-
     internal IPlaybackRunner ParentRunner
     {
         get => CallBehavior.ParentRunner;
         set => CallBehavior.ParentRunner = value;
     }
-
-    internal IPlaybackRunner ChildRunner
-    {
-        get => CallBehavior.ChildRunner;
-        set => CallBehavior.ChildRunner = value;
-    }
-
     internal int ParentAwaitCheckpointId
     {
         get => CallBehavior.ParentAwaitCheckpointId;
@@ -182,21 +118,17 @@ public struct TimelineRecord
     {
         if (endTime < StartTime)
             endTime = StartTime;
-
         Duration = endTime - StartTime;
     }
 
     internal void RebindRunners(IPlaybackRunner parentRunner, IPlaybackRunner childRunner)
     {
         ParentRunner = parentRunner;
-        ChildRunner = childRunner;
         ParentAwaitCheckpointId = 0;
     }
 
-    internal void BindParentAwaitCheckpoint(int checkpointId)
-    {
+    internal void BindParentAwaitCheckpoint(int checkpointId) =>
         ParentAwaitCheckpointId = checkpointId;
-    }
 
     private CheckpointRecordBehavior CheckpointBehavior
     {
@@ -204,7 +136,6 @@ public struct TimelineRecord
         {
             if (Behavior is not CheckpointRecordBehavior behavior)
                 throw new InvalidOperationException("Record is not a checkpoint.");
-
             return behavior;
         }
     }
@@ -213,7 +144,6 @@ public struct TimelineRecord
     {
         if (Behavior is not EffectRecordBehavior behavior)
             throw new InvalidOperationException("Record is not an effect.");
-
         return behavior;
     }
 
@@ -223,7 +153,6 @@ public struct TimelineRecord
         {
             if (Behavior is not CallRecordBehavior behavior)
                 throw new InvalidOperationException("Record is not a call.");
-
             return behavior;
         }
     }

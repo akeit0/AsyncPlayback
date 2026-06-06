@@ -9,6 +9,8 @@ public interface ITimelineRecordBehavior
 
     void AddBoundaries(in TimelineRecord record, TimelineBoundaryBuilder builder);
 
+    void AddEvaluationEntries(in TimelineRecord record, TimelineEvaluationBuilder builder);
+
     bool IsReplayMatch(in TimelineRecord record, in TimelineRecordCreateRequest request);
 
     bool IsEvaluatable(in TimelineRecord record, in RecordEvaluationQuery query);

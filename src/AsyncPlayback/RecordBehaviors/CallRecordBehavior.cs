@@ -6,11 +6,9 @@ internal sealed class CallRecordBehavior : TimelineRecordBehavior
         : base(TimelineRecordTypes.Call.Id, TimelineRecordTypes.Call.Name)
     {
         ParentRunner = parentRunner;
-        ChildRunner = childRunner;
     }
 
     public IPlaybackRunner ParentRunner { get; set; }
-    public IPlaybackRunner ChildRunner { get; set; }
     public int ParentAwaitCheckpointId { get; set; }
 
     public override TimelineRecordVisibility GetVisibility(in TimelineRecord record)

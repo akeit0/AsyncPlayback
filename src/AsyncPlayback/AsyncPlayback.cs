@@ -1,5 +1,3 @@
-using System.Runtime.InteropServices;
-
 namespace AsyncPlayback;
 
 public sealed partial class Playback
@@ -41,7 +39,7 @@ public sealed partial class Playback
     private readonly PlaybackScheduler scheduler = new();
     private readonly PlaybackStateStore stateStore = new();
     private readonly TimelineRecordRuntime recordRuntime = new();
-    private readonly List<TimelineRecord> records = [];
+    private readonly Timeline timeline;
     private bool hasTimestamp;
     private int suppressAwaitPointTimestampSamplingDepth;
     private long timestamp;
@@ -84,7 +82,7 @@ public sealed partial class Playback
 
     public event Action<PlaybackEvent>? EventOccurred;
 
-    public IReadOnlyList<TimelineRecordInfo> Records => GetRecordInfos();
+    public IReadOnlyList<TimelineRecordInfo> Records => timeline.ToInfos();
     public TimelineRecordInfo? CurrentRecord =>
         currentRecordIndex is { } index ? GetRecord(index).ToInfo() : null;
 
@@ -148,15 +146,7 @@ public sealed partial class Playback
 
         var currentIndex = currentRecordIndex ?? -1;
 
-        return records
-            .OrderBy(record => AbsTicks(record.StartTime - Time))
-            .ThenBy(record =>
-                currentIndex < 0 ? record.FlatIndex : Math.Abs(record.FlatIndex - currentIndex)
-            )
-            .ThenBy(record => record.FlatIndex)
-            .Take(count)
-            .Select(static record => record.ToInfo())
-            .ToArray();
+        return timeline.GetNearestRecords(Time, count, currentIndex);
     }
 
     public IReadOnlyList<string> GetNearestDebugLabels(int count = 5)
@@ -168,6 +158,7 @@ public sealed partial class Playback
 
     public Playback(TimeProvider? timeProvider = null)
     {
+        timeline = new(this);
         TimeProvider = timeProvider ?? global::System.TimeProvider.System;
         ResetTimestamp();
     }
@@ -427,18 +418,12 @@ public sealed partial class Playback
 
     internal TimelineRecord GetRecord(int recordIndex)
     {
-        if ((uint)recordIndex >= (uint)records.Count)
-            throw new ArgumentOutOfRangeException(nameof(recordIndex));
-
-        return records[recordIndex];
+        return timeline.Get(recordIndex);
     }
 
     private ref TimelineRecord GetRecordRef(int recordIndex)
     {
-        if ((uint)recordIndex >= (uint)records.Count)
-            throw new ArgumentOutOfRangeException(nameof(recordIndex));
-
-        return ref CollectionsMarshal.AsSpan(records)[recordIndex];
+        return ref timeline.GetRef(recordIndex);
     }
 
     private TimelineRecord GetRecord(RecordId recordId)
@@ -448,11 +433,7 @@ public sealed partial class Playback
 
     internal int GetRecordIndex(RecordId recordId)
     {
-        for (var i = 0; i < records.Count; i++)
-            if (records[i].Id == recordId)
-                return i;
-
-        throw new InvalidOperationException($"Timeline record #{recordId} does not exist.");
+        return timeline.GetIndex(recordId);
     }
 
     private TimelineRecord? GetCurrentRecord()

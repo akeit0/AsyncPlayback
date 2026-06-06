@@ -46,7 +46,7 @@ public sealed partial class Playback
                 record.ParentIndex = parentRecord?.FlatIndex;
                 record.ParentId = parentRecord?.Id;
                 record.Depth = parentRecord == null ? 0 : parentRecord.Value.Depth + 1;
-                records[record.FlatIndex] = record;
+                timeline[record.FlatIndex] = record;
             }
             else
             {
@@ -195,7 +195,7 @@ public sealed partial class Playback
             throw new InvalidOperationException("Call record index does not refer to a call.");
 
         call.BindParentAwaitCheckpoint(checkpointId);
-        records[callRecordIndex] = call;
+        timeline[callRecordIndex] = call;
     }
 
     internal void OnCheckpointCaptured(
@@ -249,7 +249,7 @@ public sealed partial class Playback
             if (call.Behavior is not CallRecordBehavior)
                 throw new InvalidOperationException("Runner call record is not a call.");
             call.Complete(Time);
-            records[callRecordIndex] = call;
+            timeline[callRecordIndex] = call;
 
             if (
                 currentDirection != PlaybackDirection.Backward
@@ -281,6 +281,7 @@ public sealed partial class Playback
         ref var target = ref GetRecordRef(GetRecordIndex(recordId));
         var hadEntryCheckpoint = target.EntryCheckpoint != null;
         target.EntryCheckpoint = checkpoint;
+        timeline.Invalidate();
         stateStore.SetEntrySnapshot(target.FlatIndex, CaptureStoreSnapshot());
         stateStore.Bind(checkpoint, target.FlatIndex);
         if (

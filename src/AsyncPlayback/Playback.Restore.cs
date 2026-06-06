@@ -24,7 +24,7 @@ public sealed partial class Playback
         suppressLoopExitForIndex = null;
         pendingForwardCheckpointIndex = null;
 
-        RebuildRecordIndexes();
+        timeline.RebuildRecordIndexes();
         recordRuntime.Reset();
 
         playbackRecordIndex = target.RecordCountAtCapture;
@@ -156,6 +156,7 @@ public sealed partial class Playback
         {
             ref var record = ref GetRecordRef(GetRecordIndex(recordId));
             record.Complete(record.StartTime + elapsed);
+            timeline.Invalidate();
             promise.Duration = record.Duration;
             promise.DueTime = record.EndTime;
             MoveTimeTo(record.EndTime);
@@ -188,14 +189,14 @@ public sealed partial class Playback
         suppressLoopExitForIndex = null;
         pendingForwardCheckpointIndex = null;
 
-        RebuildRecordIndexes();
+        timeline.RebuildRecordIndexes();
         recordRuntime.Reset();
 
         playbackRecordIndex = GetInitialPlaybackIndex();
         SetCurrentRecord((int?)null);
         IsCompleted = false;
         edgeCursor = postReady ? PlaybackEdgeCursor.None : PlaybackEdgeCursor.BeforeFirst;
-        Mode = records.Count == 0 ? PlaybackMode.Recording : PlaybackMode.Playback;
+        Mode = timeline.Count == 0 ? PlaybackMode.Recording : PlaybackMode.Playback;
         RestoreStoreSnapshot(null);
 
         rootRunner.RestoreInitialCheckpoint();
@@ -208,13 +209,13 @@ public sealed partial class Playback
 
     private int GetInitialPlaybackIndex()
     {
-        if (records.Count == 0)
+        if (timeline.Count == 0)
             return 0;
 
         if (
             rootRunner != null
-            && records[0].Behavior is TimelineRecordBehavior builtIn
-            && builtIn.IsInitialPlaybackCheckpoint(records[0], rootRunner)
+            && timeline[0].Behavior is TimelineRecordBehavior builtIn
+            && builtIn.IsInitialPlaybackCheckpoint(timeline[0], rootRunner)
         )
             return 1;
 
@@ -345,7 +346,7 @@ public sealed partial class Playback
 
                 TimelineRecord? ownerRecord = promise.OwnerRecordIndex is { } ownerIndex
                     ? GetRecord(ownerIndex)
-                    : (TimelineRecord?)null;
+                    : null;
 
                 if (
                     ownerRecord is { } loopOwner
@@ -432,16 +433,6 @@ public sealed partial class Playback
         }
     }
 
-    private IReadOnlyList<TimelineRecordInfo> GetRecordInfos()
-    {
-        var result = new TimelineRecordInfo[records.Count];
-
-        for (var i = 0; i < records.Count; i++)
-            result[i] = records[i].ToInfo();
-
-        return result;
-    }
-
     private StepResult CreateStepResult(bool moved, TimelineBoundary? boundary)
     {
         return new(
@@ -473,10 +464,5 @@ public sealed partial class Playback
             PlaybackMoveMode.Traverse => TransportEvaluation.Traverse,
             _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, null),
         };
-    }
-
-    private static long AbsTicks(TimeSpan value)
-    {
-        return value.Ticks == long.MinValue ? long.MaxValue : Math.Abs(value.Ticks);
     }
 }

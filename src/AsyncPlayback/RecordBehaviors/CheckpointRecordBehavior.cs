@@ -32,6 +32,14 @@ internal sealed class CheckpointRecordBehavior : TimelineRecordBehavior
             builder.AddPoint(record);
     }
 
+    public override void AddEvaluationEntries(
+        in TimelineRecord record,
+        TimelineEvaluationBuilder builder
+    )
+    {
+        builder.AddPoint(record.StartTime, PlaybackDirection.Backward);
+    }
+
     public override bool IsReplayMatch(
         in TimelineRecord record,
         in TimelineRecordCreateRequest request

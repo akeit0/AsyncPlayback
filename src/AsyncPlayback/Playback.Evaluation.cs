@@ -15,7 +15,10 @@ public sealed partial class Playback
 
         while (true)
         {
-            var records = GetEvaluatableRecordsAt(time, direction, includeLoopEnd, evaluatedIds);
+            var records = timeline.GetEvaluationCandidates(
+                new RecordEvaluationQuery(time, direction, includeLoopEnd) { Playback = this },
+                evaluatedIds
+            );
 
             if (records.Count == 0)
                 break;
@@ -33,53 +36,9 @@ public sealed partial class Playback
         return evaluatedAny;
     }
 
-    private List<TimelineRecord> GetEvaluatableRecordsAt(
-        TimeSpan time,
-        PlaybackDirection direction,
-        bool includeLoopEnd,
-        HashSet<RecordId> evaluatedIds
-    )
-    {
-        var result = new List<TimelineRecord>();
-
-        foreach (var record in records)
-        {
-            if (evaluatedIds.Contains(record.Id))
-                continue;
-
-            var query = new RecordEvaluationQuery(time, direction, includeLoopEnd)
-            {
-                Playback = this,
-            };
-
-            if (record.Behavior.IsEvaluatable(record, query))
-                result.Add(record);
-        }
-
-        if (direction == PlaybackDirection.Forward)
-            result.Sort(static (a, b) => a.FlatIndex.CompareTo(b.FlatIndex));
-        else
-            result.Sort(static (a, b) => b.FlatIndex.CompareTo(a.FlatIndex));
-
-        return result;
-    }
-
     internal bool HasSeekLoopEndingAt(TimeSpan time, int beforeRecordIndex)
     {
-        for (var i = Math.Min(beforeRecordIndex - 1, records.Count - 1); i >= 0; i--)
-        {
-            var record = records[i];
-            if (record.StartTime < time && record.EndTime < time)
-                break;
-
-            if (
-                record.Behavior is TimelineRecordBehavior builtIn
-                && builtIn.HasSeekLoopEndingAt(record, time)
-            )
-                return true;
-        }
-
-        return false;
+        return timeline.HasSeekLoopEndingAt(time, beforeRecordIndex);
     }
 
     internal bool HasPendingDelay(int recordIndex)
@@ -100,7 +59,7 @@ public sealed partial class Playback
     internal void EnterPlaybackAfterRecord(int recordIndex)
     {
         Mode = PlaybackMode.Playback;
-        playbackRecordIndex = Math.Min(recordIndex + 1, records.Count);
+        playbackRecordIndex = Math.Min(recordIndex + 1, timeline.Count);
     }
 
     internal void SuppressLoopExitForRecord(int recordIndex)

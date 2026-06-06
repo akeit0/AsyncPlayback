@@ -25,12 +25,12 @@ public sealed partial class Playback
         if (Mode == PlaybackMode.Playback)
         {
             if (
-                playbackRecordIndex < records.Count
-                && records[playbackRecordIndex]
-                    .Behavior.IsReplayMatch(records[playbackRecordIndex], request)
+                playbackRecordIndex < timeline.Count
+                && timeline[playbackRecordIndex]
+                    .Behavior.IsReplayMatch(timeline[playbackRecordIndex], request)
             )
             {
-                var existing = records[playbackRecordIndex];
+                var existing = timeline[playbackRecordIndex];
                 playbackRecordIndex++;
                 SetCurrentRecord(existing.Id);
                 return existing.ToInfo();
@@ -135,7 +135,7 @@ public sealed partial class Playback
         IPlaybackRunner? ownerRunnerOverride = null
     )
     {
-        record.FlatIndex = records.Count;
+        record.FlatIndex = timeline.Count;
         record.OwnerRunner = ownerRunnerOverride ?? PlaybackRuntime.CurrentRunner;
 
         var currentRunner = PlaybackRuntime.CurrentRunner;
@@ -157,10 +157,10 @@ public sealed partial class Playback
         record.ParentId = parent?.Id;
         record.Depth = parent == null ? 0 : parent.Value.Depth + 1;
 
-        records.Add(record);
+        timeline.Add(record);
 
         SetCurrentRecord(record.Id);
-        playbackRecordIndex = records.Count;
+        playbackRecordIndex = timeline.Count;
         EmitPlaybackEvent(PlaybackEventKind.RecordAdded, record.Id);
         EmitTimedRecordStart(record);
         return record;
@@ -171,10 +171,10 @@ public sealed partial class Playback
         CheckpointRecordKind checkpointKind
     )
     {
-        if (playbackRecordIndex >= records.Count)
+        if (playbackRecordIndex >= timeline.Count)
             return null;
 
-        var checkpoint = records[playbackRecordIndex];
+        var checkpoint = timeline[playbackRecordIndex];
         var request = new TimelineRecordCreateRequest(
             new CheckpointRecordBehavior(checkpointKind),
             Time,
@@ -197,10 +197,10 @@ public sealed partial class Playback
     )
     {
         record = default;
-        if (playbackRecordIndex >= records.Count)
+        if (playbackRecordIndex >= timeline.Count)
             return false;
 
-        var delay = records[playbackRecordIndex];
+        var delay = timeline[playbackRecordIndex];
         var request = new TimelineRecordCreateRequest(
             new DelayRecordBehavior(),
             Time,
@@ -221,10 +221,10 @@ public sealed partial class Playback
     private bool TryConsumeExistingEffectRecord(string debugLabel, out TimelineRecord record)
     {
         record = default;
-        if (playbackRecordIndex >= records.Count)
+        if (playbackRecordIndex >= timeline.Count)
             return false;
 
-        var effect = records[playbackRecordIndex];
+        var effect = timeline[playbackRecordIndex];
         var request = new TimelineRecordCreateRequest(
             new VoidEffectRecordBehavior(_ => ValueTask.CompletedTask),
             Time,
@@ -249,10 +249,10 @@ public sealed partial class Playback
     )
     {
         record = default;
-        if (playbackRecordIndex >= records.Count)
+        if (playbackRecordIndex >= timeline.Count)
             return false;
 
-        var loop = records[playbackRecordIndex];
+        var loop = timeline[playbackRecordIndex];
         var request = new TimelineRecordCreateRequest(
             new SeekLoopRecordBehavior(),
             Time,
@@ -278,10 +278,10 @@ public sealed partial class Playback
     )
     {
         record = default;
-        if (playbackRecordIndex >= records.Count)
+        if (playbackRecordIndex >= timeline.Count)
             return false;
 
-        var call = records[playbackRecordIndex];
+        var call = timeline[playbackRecordIndex];
         var request = new TimelineRecordCreateRequest(
             new CallRecordBehavior(parentRunner, childRunner),
             Time,
@@ -293,7 +293,7 @@ public sealed partial class Playback
             return false;
 
         call.RebindRunners(parentRunner, childRunner);
-        records[playbackRecordIndex] = call;
+        timeline[playbackRecordIndex] = call;
 
         playbackRecordIndex++;
         SetCurrentRecord(call.Id);
@@ -303,10 +303,10 @@ public sealed partial class Playback
 
     private bool IsFutureTargetBanned(TimeSpan targetTime, PlaybackTransportSource source)
     {
-        if (records.Count == 0)
+        if (timeline.Count == 0)
             return false;
 
-        if (targetTime <= GetRecordedEndTime())
+        if (targetTime <= timeline.RecordedEndTime)
             return false;
 
         if (source == PlaybackTransportSource.Clock && !IsCompleted)
@@ -315,17 +315,6 @@ public sealed partial class Playback
         return Mode == PlaybackMode.Playback
             || IsCompleted
             || edgeCursor == PlaybackEdgeCursor.AfterLast;
-    }
-
-    private TimeSpan GetRecordedEndTime()
-    {
-        var end = TimeSpan.Zero;
-
-        foreach (var record in records)
-            if (record.EndTime > end)
-                end = record.EndTime;
-
-        return end;
     }
 
     private void SwitchToRecordingFromPlaybackCursor()
@@ -344,56 +333,17 @@ public sealed partial class Playback
 
     private void TruncateRecordsFrom(int index)
     {
-        index = Math.Clamp(index, 0, records.Count);
+        timeline.TruncateFrom(index);
+        nextRecordId = timeline.NextIdSeed;
 
-        for (var i = records.Count - 1; i >= index; i--)
-            records.RemoveAt(i);
-
-        nextRecordId = records.Count == 0 ? 0 : records.Max(static record => record.Id.Value);
-
-        if (records.Count == 0)
+        if (timeline.Count == 0)
             SetCurrentRecord((int?)null);
         else
-            SetCurrentRecord(records[^1].Id);
+            SetCurrentRecord(timeline.Last!.Value.Id);
 
-        playbackRecordIndex = records.Count;
+        playbackRecordIndex = timeline.Count;
 
-        RebuildRecordIndexes();
-        recordRuntime.TrimTo(records.Count);
-    }
-
-    private void RebuildRecordIndexes()
-    {
-        var liveIndexesById = new Dictionary<RecordId, int>();
-
-        for (var i = 0; i < records.Count; i++)
-        {
-            var record = records[i];
-            record.FlatIndex = i;
-            liveIndexesById[record.Id] = i;
-            records[i] = record;
-        }
-
-        for (var i = 0; i < records.Count; i++)
-        {
-            var record = records[i];
-
-            if (
-                record.ParentId is { } parentId
-                && liveIndexesById.TryGetValue(parentId, out var parentIndex)
-            )
-            {
-                record.ParentIndex = parentIndex;
-                record.Depth = records[parentIndex].Depth + 1;
-                records[i] = record;
-                continue;
-            }
-
-            record.ParentIndex = null;
-            record.ParentId = null;
-            record.Depth = 0;
-            records[i] = record;
-        }
+        recordRuntime.TrimTo(timeline.Count);
     }
 
     private void MoveToTimelineGap(TimeSpan targetTime)
@@ -407,7 +357,7 @@ public sealed partial class Playback
         MoveTimeTo(targetTime);
         edgeCursor = PlaybackEdgeCursor.None;
 
-        var nearest = FindNearestRecordAtOrBefore(targetTime);
+        var nearest = timeline.FindNearestRecordAtOrBefore(targetTime);
         if (nearest == null)
             SetCurrentRecord((int?)null);
         else
@@ -417,25 +367,9 @@ public sealed partial class Playback
         else
             stateStore.RestoreEntry(nearest.Value.FlatIndex);
 
-        Mode = records.Count == 0 ? PlaybackMode.Recording : PlaybackMode.Playback;
+        Mode = timeline.Count == 0 ? PlaybackMode.Recording : PlaybackMode.Playback;
 
         playbackRecordIndex =
-            nearest == null ? 0 : Math.Min(nearest.Value.FlatIndex + 1, records.Count);
-    }
-
-    private TimelineRecord? FindNearestRecordAtOrBefore(TimeSpan targetTime)
-    {
-        TimelineRecord? best = null;
-
-        foreach (var record in records)
-        {
-            if (record.StartTime > targetTime)
-                continue;
-
-            if (best == null || record.FlatIndex > best.Value.FlatIndex)
-                best = record;
-        }
-
-        return best;
+            nearest == null ? 0 : Math.Min(nearest.Value.FlatIndex + 1, timeline.Count);
     }
 }

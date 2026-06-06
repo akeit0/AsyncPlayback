@@ -11,6 +11,14 @@ internal sealed class SeekLoopRecordBehavior : TimelineRecordBehavior
         builder.AddEnd(record);
     }
 
+    public override void AddEvaluationEntries(
+        in TimelineRecord record,
+        TimelineEvaluationBuilder builder
+    )
+    {
+        builder.AddRange(record.StartTime, record.EndTime);
+    }
+
     public override bool IsReplayMatch(
         in TimelineRecord record,
         in TimelineRecordCreateRequest request
@@ -24,7 +32,8 @@ internal sealed class SeekLoopRecordBehavior : TimelineRecordBehavior
 
     public override bool IsEvaluatable(in TimelineRecord record, in RecordEvaluationQuery query)
     {
-        return record.Contains(query.Time, query.IncludeEnd);
+        return record.StartTime <= query.Time
+            && (query.IncludeEnd ? query.Time <= record.EndTime : query.Time < record.EndTime);
     }
 
     public override ValueTask EvaluateAsync(
@@ -72,11 +81,6 @@ internal sealed class SeekLoopRecordBehavior : TimelineRecordBehavior
     )
     {
         return GetTimedBoundaryPosition(record, time);
-    }
-
-    internal override bool HasTimedBoundaryAt(in TimelineRecord record, TimeSpan time)
-    {
-        return HasTimedBoundary(record, time);
     }
 
     internal override void AddTimedBoundaryTimes(

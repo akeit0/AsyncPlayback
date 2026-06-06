@@ -11,6 +11,14 @@ internal abstract class EffectRecordBehavior : TimelineRecordBehavior
         builder.AddEnd(record);
     }
 
+    public override void AddEvaluationEntries(
+        in TimelineRecord record,
+        TimelineEvaluationBuilder builder
+    )
+    {
+        builder.AddPoint(record.StartTime);
+    }
+
     public override bool IsReplayMatch(
         in TimelineRecord record,
         in TimelineRecordCreateRequest request

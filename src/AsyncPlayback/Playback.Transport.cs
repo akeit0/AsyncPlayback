@@ -390,9 +390,9 @@ public sealed partial class Playback
 
     private TimelineRecord? FindTerminalEdgeCheckpointRecord()
     {
-        for (var i = records.Count - 1; i >= 0; i--)
+        for (var i = timeline.Count - 1; i >= 0; i--)
             if (
-                records[i] is { EntryCheckpoint: not null } checkpoint
+                timeline[i] is { EntryCheckpoint: not null } checkpoint
                 && checkpoint.Behavior is TimelineRecordBehavior checkpointType
                 && checkpointType.IsCheckpointRecord(checkpoint)
             )
@@ -405,8 +405,9 @@ public sealed partial class Playback
     {
         TimelineRecord? best = null;
 
-        foreach (var record in records)
+        for (var i = 0; i < timeline.Count; i++)
         {
+            var record = timeline[i];
             if (
                 record.Behavior is not TimelineRecordBehavior builtIn
                 || !builtIn.IsPendingBackwardDelayCandidate(record, Time, transportStartTime)

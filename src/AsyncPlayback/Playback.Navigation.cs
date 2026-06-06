@@ -113,7 +113,7 @@ public sealed partial class Playback
     {
         TimelineBoundary? best = null;
 
-        foreach (var boundary in EnumerateTimelineBoundaries(GetStepBoundaryScope(direction)))
+        foreach (var boundary in timeline.GetBoundaries(GetStepBoundaryScope(direction)))
         {
             if (!IsStepBoundaryIncluded(boundary, granularity))
                 continue;
@@ -188,23 +188,6 @@ public sealed partial class Playback
             : record.Behavior.GetVisibility(record) == TimelineRecordVisibility.Workflow;
     }
 
-    private IEnumerable<TimelineBoundary> EnumerateTimelineBoundaries(TimelineBoundaryScope scope)
-    {
-        var timedBoundaryTimes =
-            scope == TimelineBoundaryScope.StepBackward ? GetTimedBoundaryTimes() : null;
-        var boundaries = new List<TimelineBoundary>();
-        var builder = new TimelineBoundaryBuilder(this, scope, timedBoundaryTimes, boundaries);
-
-        foreach (var record in records)
-        {
-            boundaries.Clear();
-            record.Behavior.AddBoundaries(record, builder);
-
-            foreach (var boundary in boundaries)
-                yield return boundary;
-        }
-    }
-
     private TimelineBoundary? GetCurrentBoundaryPosition()
     {
         var record = GetCurrentRecord();
@@ -223,7 +206,7 @@ public sealed partial class Playback
     {
         var overlapsTimedBoundary =
             timedBoundaryTimes?.Contains(checkpoint.StartTime)
-            ?? HasTimedBoundaryAt(checkpoint.StartTime);
+            ?? timeline.HasTimedBoundaryAt(checkpoint.StartTime);
 
         if (overlapsTimedBoundary)
             return false;
@@ -231,46 +214,10 @@ public sealed partial class Playback
         return checkpoint.CheckpointKind switch
         {
             CheckpointRecordKind.Entry => true,
-            CheckpointRecordKind.User => HasLaterRecordForRunner(checkpoint),
+            CheckpointRecordKind.User => timeline.HasLaterRecordForRunner(checkpoint),
             CheckpointRecordKind.Implicit => false,
             _ => false,
         };
-    }
-
-    private HashSet<TimeSpan> GetTimedBoundaryTimes()
-    {
-        var result = new HashSet<TimeSpan>();
-
-        foreach (var record in records)
-        {
-            if (record.Behavior is TimelineRecordBehavior builtIn)
-                builtIn.AddTimedBoundaryTimes(record, result);
-        }
-
-        return result;
-    }
-
-    private bool HasLaterRecordForRunner(TimelineRecord record)
-    {
-        for (var i = record.FlatIndex + 1; i < records.Count; i++)
-            if (ReferenceEquals(records[i].OwnerRunner, record.OwnerRunner))
-                return true;
-
-        return false;
-    }
-
-    private bool HasTimedBoundaryAt(TimeSpan time)
-    {
-        foreach (var record in records)
-        {
-            if (
-                record.Behavior is TimelineRecordBehavior builtIn
-                && builtIn.HasTimedBoundaryAt(record, time)
-            )
-                return true;
-        }
-
-        return false;
     }
 
     private bool IsSeekLoopStartBoundary(TimelineBoundary boundary)
@@ -373,7 +320,7 @@ public sealed partial class Playback
     {
         TimelineBoundary? best = null;
 
-        foreach (var boundary in EnumerateTimelineBoundaries(TimelineBoundaryScope.Traversal))
+        foreach (var boundary in timeline.GetBoundaries(TimelineBoundaryScope.Traversal))
         {
             if (!IsBetween(boundary.Time, from, to, direction))
                 continue;
