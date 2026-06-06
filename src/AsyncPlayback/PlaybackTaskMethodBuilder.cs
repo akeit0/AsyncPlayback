@@ -9,7 +9,7 @@ public sealed class PlaybackTaskMethodBuilder
 
     private PlaybackTaskMethodBuilder(Playback playback)
     {
-        promise = new(playback, PlaybackPromiseKind.AsyncMethod);
+        promise = new(playback, Playback.AsyncMethodAwaitBehavior.Instance);
         core = new(playback, promise);
     }
 
@@ -67,7 +67,7 @@ public sealed class PlaybackTaskMethodBuilder<T>
 
     private PlaybackTaskMethodBuilder(Playback playback)
     {
-        promise = new(playback, PlaybackPromiseKind.AsyncMethod);
+        promise = new(playback, Playback.AsyncMethodAwaitBehavior.Instance);
         core = new(playback, promise);
     }
 
@@ -271,19 +271,17 @@ internal sealed class PlaybackTaskMethodBuilderCore
 
         var checkpointId = typedRunner.CaptureCheckpoint(
             ref stateMachine,
-            awaitedPromise.Kind,
+            awaitedPromise.AwaitBehavior,
             awaitedPromise,
             ownerRecordIndex,
             resumeScope
         );
 
-        if (awaitedPromise.Kind == PlaybackPromiseKind.AsyncMethod && awaitedPromise.Runner != null)
-            awaitedPromise.Runner.SetParentAwaitCheckpointId(checkpointId);
-
-        awaitedPromise.AddRunnerContinuation(
+        awaitedPromise.AwaitBehavior.OnCaptured(
+            playback,
             typedRunner,
             checkpointId,
-            typedRunner.Epoch,
+            awaitedPromise,
             resumeScope
         );
     }
@@ -306,7 +304,6 @@ internal sealed class PlaybackTaskMethodBuilderCore
 
         typedRunner.CaptureReplaySuspension(
             ref stateMachine,
-            awaiter.ReplayAwaitKind,
             awaiter.ReplayOwnerRecordIndex,
             resumeScope
         );
@@ -334,19 +331,18 @@ internal sealed class PlaybackTaskMethodBuilderCore
 
         var checkpointId = typedRunner.CaptureCheckpoint(
             ref stateMachine,
-            PlaybackPromiseKind.Checkpoint,
+            Playback.CheckpointAwaitBehavior.Instance,
             null,
             playback.GetRecordIndex(recordId),
             resumeScope
         );
-
-        var expectedEpoch = typedRunner.Epoch;
-
-        if (!playback.SuppressCheckpointAutoContinuation)
-            playback.Post(
-                new PostedCheckpointResume(typedRunner, checkpointId, expectedEpoch, resumeScope),
-                ResumeCheckpoint
-            );
+        Playback.CheckpointAwaitBehavior.Instance.OnCaptured(
+            playback,
+            typedRunner,
+            checkpointId,
+            null,
+            resumeScope
+        );
     }
 
     private sealed record PostedCheckpointResume(

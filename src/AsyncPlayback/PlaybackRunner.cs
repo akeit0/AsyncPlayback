@@ -209,7 +209,6 @@ internal sealed class PlaybackRunner<TStateMachine> : IPlaybackRunner
 
     public int CaptureReplaySuspension(
         ref TStateMachine stateMachine,
-        PlaybackPromiseKind awaitKind,
         int ownerRecordIndex,
         int? resumeScopeIndex
     )
@@ -221,7 +220,7 @@ internal sealed class PlaybackRunner<TStateMachine> : IPlaybackRunner
 
     public int CaptureCheckpoint(
         ref TStateMachine stateMachine,
-        PlaybackPromiseKind awaitKind,
+        Playback.IPlaybackAwaitBehavior awaitBehavior,
         PlaybackPromiseBase? awaitedPromise,
         int? ownerRecordIndex,
         int? resumeScopeIndex
@@ -232,7 +231,7 @@ internal sealed class PlaybackRunner<TStateMachine> : IPlaybackRunner
         playback.OnCheckpointCaptured(
             this,
             checkpointId,
-            awaitKind,
+            awaitBehavior,
             awaitedPromise,
             ownerRecordIndex,
             resumeScopeIndex

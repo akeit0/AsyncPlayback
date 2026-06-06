@@ -7,7 +7,7 @@ internal sealed class TimelineCheckpoint
         IPlaybackRunner runner,
         int checkpointId,
         TimeSpan time,
-        PlaybackPromiseKind awaitKind,
+        Playback.IPlaybackAwaitBehavior awaitBehavior,
         PlaybackPromiseBase? awaitedPromise,
         int? resumeScope,
         int recordCountAtCapture,
@@ -19,7 +19,7 @@ internal sealed class TimelineCheckpoint
         Runner = runner;
         CheckpointId = checkpointId;
         Time = time;
-        AwaitKind = awaitKind;
+        AwaitBehavior = awaitBehavior;
         AwaitedPromise = awaitedPromise;
         ResumeScope = resumeScope;
         RecordCountAtCapture = recordCountAtCapture;
@@ -31,7 +31,7 @@ internal sealed class TimelineCheckpoint
     public IPlaybackRunner Runner { get; }
     public int CheckpointId { get; }
     public TimeSpan Time { get; }
-    public PlaybackPromiseKind AwaitKind { get; }
+    internal Playback.IPlaybackAwaitBehavior AwaitBehavior { get; }
     public PlaybackPromiseBase? AwaitedPromise { get; }
     public int? ResumeScope { get; }
     public int RecordCountAtCapture { get; }

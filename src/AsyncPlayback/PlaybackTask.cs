@@ -9,7 +9,6 @@ public readonly partial struct PlaybackTask
     private readonly Exception? exception;
     private readonly bool completed;
     private readonly bool replaySuspended;
-    private readonly PlaybackPromiseKind replayAwaitKind;
     private readonly int replayOwnerRecordIndex;
 
     internal PlaybackTask(PlaybackPromise promise)
@@ -18,7 +17,6 @@ public readonly partial struct PlaybackTask
         exception = null;
         completed = false;
         replaySuspended = false;
-        replayAwaitKind = default;
         replayOwnerRecordIndex = -1;
     }
 
@@ -28,27 +26,22 @@ public readonly partial struct PlaybackTask
         this.exception = exception;
         this.completed = completed;
         replaySuspended = false;
-        replayAwaitKind = default;
         replayOwnerRecordIndex = -1;
     }
 
     internal static PlaybackTask Completed { get; } = new(true);
 
-    internal static PlaybackTask SuspendReplayAt(
-        PlaybackPromiseKind awaitKind,
-        int ownerRecordIndex
-    )
+    internal static PlaybackTask SuspendReplayAt(int ownerRecordIndex)
     {
-        return new(awaitKind, ownerRecordIndex);
+        return new(ownerRecordIndex);
     }
 
-    private PlaybackTask(PlaybackPromiseKind awaitKind, int ownerRecordIndex)
+    private PlaybackTask(int ownerRecordIndex)
     {
         Promise = null;
         exception = null;
         completed = false;
         replaySuspended = true;
-        replayAwaitKind = awaitKind;
         replayOwnerRecordIndex = ownerRecordIndex;
     }
 
@@ -62,14 +55,7 @@ public readonly partial struct PlaybackTask
         if (Promise == null && !completed && !replaySuspended)
             throw new InvalidOperationException("Default PlaybackTask cannot be awaited.");
 
-        return new(
-            Promise,
-            completed,
-            exception,
-            replaySuspended,
-            replayAwaitKind,
-            replayOwnerRecordIndex
-        );
+        return new(Promise, completed, exception, replaySuspended, replayOwnerRecordIndex);
     }
 
     public readonly struct Awaiter : ICriticalNotifyCompletion, IPlaybackAwaiter
@@ -78,7 +64,6 @@ public readonly partial struct PlaybackTask
         private readonly Exception? exception;
         private readonly bool completed;
         private readonly bool replaySuspended;
-        private readonly PlaybackPromiseKind replayAwaitKind;
         private readonly int replayOwnerRecordIndex;
 
         internal Awaiter(
@@ -86,7 +71,6 @@ public readonly partial struct PlaybackTask
             bool completed,
             Exception? exception,
             bool replaySuspended,
-            PlaybackPromiseKind replayAwaitKind,
             int replayOwnerRecordIndex
         )
         {
@@ -94,7 +78,6 @@ public readonly partial struct PlaybackTask
             this.completed = completed;
             this.exception = exception;
             this.replaySuspended = replaySuspended;
-            this.replayAwaitKind = replayAwaitKind;
             this.replayOwnerRecordIndex = replayOwnerRecordIndex;
         }
 
@@ -102,7 +85,6 @@ public readonly partial struct PlaybackTask
 
         PlaybackPromiseBase? IPlaybackAwaiter.Promise => promise;
         bool IPlaybackAwaiter.IsReplaySuspension => replaySuspended;
-        PlaybackPromiseKind IPlaybackAwaiter.ReplayAwaitKind => replayAwaitKind;
         int IPlaybackAwaiter.ReplayOwnerRecordIndex => replayOwnerRecordIndex;
 
         public void GetResult()
@@ -148,7 +130,6 @@ public readonly struct PlaybackTask<T>
     private readonly T? result;
     private readonly bool completed;
     private readonly bool replaySuspended;
-    private readonly PlaybackPromiseKind replayAwaitKind;
     private readonly int replayOwnerRecordIndex;
 
     internal PlaybackTask(PlaybackPromise<T> promise)
@@ -157,7 +138,6 @@ public readonly struct PlaybackTask<T>
         result = default;
         completed = false;
         replaySuspended = false;
-        replayAwaitKind = default;
         replayOwnerRecordIndex = -1;
     }
 
@@ -167,7 +147,6 @@ public readonly struct PlaybackTask<T>
         this.result = result;
         completed = true;
         replaySuspended = false;
-        replayAwaitKind = default;
         replayOwnerRecordIndex = -1;
     }
 
@@ -176,21 +155,17 @@ public readonly struct PlaybackTask<T>
         return new(result);
     }
 
-    internal static PlaybackTask<T> SuspendReplayAt(
-        PlaybackPromiseKind awaitKind,
-        int ownerRecordIndex
-    )
+    internal static PlaybackTask<T> SuspendReplayAt(int ownerRecordIndex)
     {
-        return new(awaitKind, ownerRecordIndex);
+        return new(ownerRecordIndex);
     }
 
-    private PlaybackTask(PlaybackPromiseKind awaitKind, int ownerRecordIndex)
+    private PlaybackTask(int ownerRecordIndex)
     {
         Promise = null;
         result = default;
         completed = false;
         replaySuspended = true;
-        replayAwaitKind = awaitKind;
         replayOwnerRecordIndex = ownerRecordIndex;
     }
 
@@ -199,14 +174,7 @@ public readonly struct PlaybackTask<T>
         if (Promise == null && !completed && !replaySuspended)
             throw new InvalidOperationException("Default PlaybackTask<T> cannot be awaited.");
 
-        return new(
-            Promise,
-            result,
-            completed,
-            replaySuspended,
-            replayAwaitKind,
-            replayOwnerRecordIndex
-        );
+        return new(Promise, result, completed, replaySuspended, replayOwnerRecordIndex);
     }
 
     public readonly struct Awaiter : ICriticalNotifyCompletion, IPlaybackAwaiter
@@ -215,7 +183,6 @@ public readonly struct PlaybackTask<T>
         private readonly T? result;
         private readonly bool completed;
         private readonly bool replaySuspended;
-        private readonly PlaybackPromiseKind replayAwaitKind;
         private readonly int replayOwnerRecordIndex;
 
         internal Awaiter(
@@ -223,7 +190,6 @@ public readonly struct PlaybackTask<T>
             T? result,
             bool completed,
             bool replaySuspended,
-            PlaybackPromiseKind replayAwaitKind,
             int replayOwnerRecordIndex
         )
         {
@@ -231,7 +197,6 @@ public readonly struct PlaybackTask<T>
             this.result = result;
             this.completed = completed;
             this.replaySuspended = replaySuspended;
-            this.replayAwaitKind = replayAwaitKind;
             this.replayOwnerRecordIndex = replayOwnerRecordIndex;
         }
 
@@ -239,7 +204,6 @@ public readonly struct PlaybackTask<T>
 
         PlaybackPromiseBase? IPlaybackAwaiter.Promise => promise;
         bool IPlaybackAwaiter.IsReplaySuspension => replaySuspended;
-        PlaybackPromiseKind IPlaybackAwaiter.ReplayAwaitKind => replayAwaitKind;
         int IPlaybackAwaiter.ReplayOwnerRecordIndex => replayOwnerRecordIndex;
 
         public T GetResult()
@@ -280,6 +244,5 @@ public interface IPlaybackAwaiter
     Playback? playback => null;
     string? DebugLabel => null;
     bool IsReplaySuspension => false;
-    PlaybackPromiseKind ReplayAwaitKind => default;
     int ReplayOwnerRecordIndex => -1;
 }

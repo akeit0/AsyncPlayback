@@ -14,13 +14,16 @@ public abstract class PlaybackPromiseBase
 
     private PromiseStatus status;
 
-    protected PlaybackPromiseBase(Playback playback, PlaybackPromiseKind kind)
+    private protected PlaybackPromiseBase(
+        Playback playback,
+        Playback.IPlaybackAwaitBehavior awaitBehavior
+    )
     {
         this.playback = playback;
-        Kind = kind;
+        AwaitBehavior = awaitBehavior;
     }
 
-    public PlaybackPromiseKind Kind { get; }
+    internal Playback.IPlaybackAwaitBehavior AwaitBehavior { get; }
 
     public TimeSpan StartTime { get; set; }
     public TimeSpan Duration { get; set; }
@@ -209,8 +212,8 @@ public abstract class PlaybackPromiseBase
 
 internal sealed class PlaybackPromise : PlaybackPromiseBase
 {
-    public PlaybackPromise(Playback playback, PlaybackPromiseKind kind)
-        : base(playback, kind) { }
+    internal PlaybackPromise(Playback playback, Playback.IPlaybackAwaitBehavior awaitBehavior)
+        : base(playback, awaitBehavior) { }
 
     public bool TrySetResult()
     {
@@ -232,8 +235,8 @@ internal sealed class PlaybackPromise<T> : PlaybackPromiseBase
 {
     private T? result;
 
-    public PlaybackPromise(Playback playback, PlaybackPromiseKind kind)
-        : base(playback, kind) { }
+    internal PlaybackPromise(Playback playback, Playback.IPlaybackAwaitBehavior awaitBehavior)
+        : base(playback, awaitBehavior) { }
 
     public override void ResetForReplay()
     {

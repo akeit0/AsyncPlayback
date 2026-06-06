@@ -205,7 +205,7 @@ public sealed partial class Playback
     {
         EnsureCurrentPlayback();
 
-        var promise = new PlaybackPromise(this, PlaybackPromiseKind.Yield)
+        var promise = new PlaybackPromise(this, YieldAwaitBehavior.Instance)
         {
             StartTime = Time,
             Duration = TimeSpan.Zero,
@@ -222,9 +222,9 @@ public sealed partial class Playback
 
         var record = playback.UseDelayRecord(duration, debugLabel);
         if (currentDirection == PlaybackDirection.Backward)
-            return PlaybackTask.SuspendReplayAt(PlaybackPromiseKind.Delay, record.FlatIndex);
+            return PlaybackTask.SuspendReplayAt(record.FlatIndex);
 
-        var promise = new PlaybackPromise(playback, PlaybackPromiseKind.Delay)
+        var promise = new PlaybackPromise(playback, DelayAwaitBehavior.Instance)
         {
             StartTime = record.StartTime,
             Duration = record.Duration,
@@ -270,10 +270,10 @@ public sealed partial class Playback
                     return PlaybackTask.FromException(revertFailure);
             }
 
-            return PlaybackTask.SuspendReplayAt(PlaybackPromiseKind.Effect, record.FlatIndex);
+            return PlaybackTask.SuspendReplayAt(record.FlatIndex);
         }
 
-        var promise = new PlaybackPromise(this, PlaybackPromiseKind.Effect)
+        var promise = new PlaybackPromise(this, EffectAwaitBehavior.Instance)
         {
             StartTime = record.StartTime,
             Duration = record.Duration,
@@ -299,10 +299,10 @@ public sealed partial class Playback
 
         if (currentDirection == PlaybackDirection.Backward)
         {
-            return PlaybackTask<T>.SuspendReplayAt(PlaybackPromiseKind.Effect, record.FlatIndex);
+            return PlaybackTask<T>.SuspendReplayAt(record.FlatIndex);
         }
 
-        var promise = new PlaybackPromise<T>(this, PlaybackPromiseKind.Effect)
+        var promise = new PlaybackPromise<T>(this, EffectAwaitBehavior.Instance)
         {
             StartTime = record.StartTime,
             Duration = record.Duration,
@@ -349,12 +349,9 @@ public sealed partial class Playback
             : (TimelineRecord)record;
 
         if (currentDirection == PlaybackDirection.Backward)
-            return PlaybackTask<bool>.SuspendReplayAt(
-                PlaybackPromiseKind.SeekLoopMoveNext,
-                ownerRecord.FlatIndex
-            );
+            return PlaybackTask<bool>.SuspendReplayAt(ownerRecord.FlatIndex);
 
-        var promise = new PlaybackPromise<bool>(this, PlaybackPromiseKind.SeekLoopMoveNext)
+        var promise = new PlaybackPromise<bool>(this, SeekLoopMoveNextAwaitBehavior.Instance)
         {
             StartTime = record.StartTime,
             Duration = record.Duration,

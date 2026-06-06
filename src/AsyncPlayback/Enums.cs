@@ -13,16 +13,6 @@ public enum CheckpointRecordKind
     Implicit,
 }
 
-public enum PlaybackPromiseKind
-{
-    AsyncMethod,
-    Delay,
-    Effect,
-    Yield,
-    Checkpoint,
-    SeekLoopMoveNext,
-}
-
 public enum PlaybackMode
 {
     Recording,

@@ -1,6 +1,6 @@
 namespace AsyncPlayback;
 
-public sealed class TimelineEvaluationBuilder
+public readonly struct TimelineEvaluationBuilder
 {
     private readonly Timeline timeline;
     private readonly int recordIndex;
