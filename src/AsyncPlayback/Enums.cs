@@ -1,14 +1,5 @@
 namespace AsyncPlayback;
 
-public enum TimelineRecordKind
-{
-    Checkpoint,
-    Delay,
-    Effect,
-    SeekLoop,
-    Call,
-}
-
 public enum TimelineRecordVisibility
 {
     Workflow,

@@ -1,15 +1,13 @@
 namespace AsyncPlayback;
 
-internal struct TimelineRecord
+public struct TimelineRecord
 {
     private TimelineRecord(
         RecordId id,
-        TimelineRecordKind kind,
+        ITimelineRecordBehavior behavior,
         TimeSpan startTime,
         TimeSpan duration,
-        string debugLabel,
-        CheckpointRecordKind checkpointKind = default,
-        IRecordPayload? payload = null
+        string debugLabel
     )
     {
         if (duration < TimeSpan.Zero)
@@ -19,12 +17,10 @@ internal struct TimelineRecord
             );
 
         Id = id;
-        Kind = kind;
+        Behavior = behavior ?? throw new ArgumentNullException(nameof(behavior));
         StartTime = startTime;
         Duration = duration;
-        DebugLabel = string.IsNullOrWhiteSpace(debugLabel) ? kind.ToString() : debugLabel;
-        CheckpointKind = checkpointKind;
-        Payload = payload;
+        DebugLabel = string.IsNullOrWhiteSpace(debugLabel) ? behavior.TypeName : debugLabel;
         ParentIndex = null;
         ParentId = null;
         Depth = 0;
@@ -34,20 +30,20 @@ internal struct TimelineRecord
     }
 
     public RecordId Id { get; }
-    public TimelineRecordKind Kind { get; }
+    public ITimelineRecordBehavior Behavior { get; }
     public TimeSpan StartTime { get; }
     public TimeSpan Duration { get; set; }
     public TimeSpan EndTime => StartTime + Duration;
     public string DebugLabel { get; }
-    public CheckpointRecordKind CheckpointKind { get; }
-    public IRecordPayload? Payload { get; }
 
     public int? ParentIndex { get; set; }
     public RecordId? ParentId { get; set; }
     public int Depth { get; set; }
     public int FlatIndex { get; set; }
-    public IPlaybackRunner? OwnerRunner { get; set; }
-    public TimelineCheckpoint? EntryCheckpoint { get; set; }
+    internal IPlaybackRunner? OwnerRunner { get; set; }
+    internal TimelineCheckpoint? EntryCheckpoint { get; set; }
+
+    public CheckpointRecordKind CheckpointKind => CheckpointBehavior.CheckpointKind;
 
     public static TimelineRecord Checkpoint(
         RecordId id,
@@ -58,11 +54,10 @@ internal struct TimelineRecord
     {
         return new(
             id,
-            TimelineRecordKind.Checkpoint,
+            new CheckpointRecordBehavior(checkpointKind),
             time,
             TimeSpan.Zero,
-            debugLabel,
-            checkpointKind
+            debugLabel
         );
     }
 
@@ -73,7 +68,7 @@ internal struct TimelineRecord
         string debugLabel
     )
     {
-        return new(id, TimelineRecordKind.Delay, startTime, duration, debugLabel);
+        return new(id, new DelayRecordBehavior(), startTime, duration, debugLabel);
     }
 
     public static TimelineRecord Effect(
@@ -85,11 +80,10 @@ internal struct TimelineRecord
     {
         return new(
             id,
-            TimelineRecordKind.Effect,
+            new EffectRecordBehavior(executeAsync),
             startTime,
             TimeSpan.Zero,
-            debugLabel,
-            payload: new EffectRecordPayload(executeAsync)
+            debugLabel
         );
     }
 
@@ -100,10 +94,10 @@ internal struct TimelineRecord
         string debugLabel
     )
     {
-        return new(id, TimelineRecordKind.SeekLoop, startTime, duration, debugLabel);
+        return new(id, new SeekLoopRecordBehavior(), startTime, duration, debugLabel);
     }
 
-    public static TimelineRecord Call(
+    internal static TimelineRecord Call(
         RecordId id,
         TimeSpan startTime,
         string debugLabel,
@@ -113,12 +107,22 @@ internal struct TimelineRecord
     {
         return new(
             id,
-            TimelineRecordKind.Call,
+            new CallRecordBehavior(parentRunner, childRunner),
             startTime,
             TimeSpan.Zero,
-            debugLabel,
-            payload: new CallRecordPayload(parentRunner, childRunner)
+            debugLabel
         );
+    }
+
+    public static TimelineRecord Create(
+        RecordId id,
+        ITimelineRecordBehavior behavior,
+        TimeSpan startTime,
+        TimeSpan duration,
+        string debugLabel
+    )
+    {
+        return new(id, behavior, startTime, duration, debugLabel);
     }
 
     public bool Contains(TimeSpan time, bool includeEnd = true)
@@ -130,65 +134,47 @@ internal struct TimelineRecord
 
     public TimelineRecordInfo ToInfo()
     {
-        return new(
-            Id,
-            Kind,
-            StartTime,
-            Duration,
-            DebugLabel,
-            ParentId,
-            Depth,
-            GetVisibility(),
-            Kind == TimelineRecordKind.Checkpoint ? CheckpointKind : null,
-            EntryCheckpoint?.Timestamp,
-            EntryCheckpoint?.DeltaTime
-        );
-    }
-
-    private TimelineRecordVisibility GetVisibility()
-    {
-        return Kind == TimelineRecordKind.Checkpoint && CheckpointKind != CheckpointRecordKind.User
-            ? TimelineRecordVisibility.Infrastructure
-            : TimelineRecordVisibility.Workflow;
+        return Behavior.ToInfo(this);
     }
 
     public bool IsCheckpoint(CheckpointRecordKind kind)
     {
-        return Kind == TimelineRecordKind.Checkpoint && CheckpointKind == kind;
+        return Behavior is CheckpointRecordBehavior checkpoint && checkpoint.CheckpointKind == kind;
     }
 
-    public Func<CancellationToken, ValueTask<object?>> ExecuteAsync => EffectPayload.ExecuteAsync;
+    internal Func<CancellationToken, ValueTask<object?>> ExecuteAsync =>
+        EffectBehavior.ExecuteAsync;
 
-    public bool TryGetEffectResult(out object? result)
+    internal bool TryGetEffectResult(out object? result)
     {
-        var payload = EffectPayload;
-        result = payload.Result;
-        return payload.HasResult;
+        var behavior = EffectBehavior;
+        result = behavior.Result;
+        return behavior.HasResult;
     }
 
-    public void SetEffectResult(object? result)
+    internal void SetEffectResult(object? result)
     {
-        var payload = EffectPayload;
-        payload.Result = result;
-        payload.HasResult = true;
+        var behavior = EffectBehavior;
+        behavior.Result = result;
+        behavior.HasResult = true;
     }
 
-    public IPlaybackRunner ParentRunner
+    internal IPlaybackRunner ParentRunner
     {
-        get => CallPayload.ParentRunner;
-        set => CallPayload.ParentRunner = value;
+        get => CallBehavior.ParentRunner;
+        set => CallBehavior.ParentRunner = value;
     }
 
-    public IPlaybackRunner ChildRunner
+    internal IPlaybackRunner ChildRunner
     {
-        get => CallPayload.ChildRunner;
-        set => CallPayload.ChildRunner = value;
+        get => CallBehavior.ChildRunner;
+        set => CallBehavior.ChildRunner = value;
     }
 
-    public int ParentAwaitCheckpointId
+    internal int ParentAwaitCheckpointId
     {
-        get => CallPayload.ParentAwaitCheckpointId;
-        set => CallPayload.ParentAwaitCheckpointId = value;
+        get => CallBehavior.ParentAwaitCheckpointId;
+        set => CallBehavior.ParentAwaitCheckpointId = value;
     }
 
     public void Complete(TimeSpan endTime)
@@ -199,37 +185,48 @@ internal struct TimelineRecord
         Duration = endTime - StartTime;
     }
 
-    public void RebindRunners(IPlaybackRunner parentRunner, IPlaybackRunner childRunner)
+    internal void RebindRunners(IPlaybackRunner parentRunner, IPlaybackRunner childRunner)
     {
         ParentRunner = parentRunner;
         ChildRunner = childRunner;
         ParentAwaitCheckpointId = 0;
     }
 
-    public void BindParentAwaitCheckpoint(int checkpointId)
+    internal void BindParentAwaitCheckpoint(int checkpointId)
     {
         ParentAwaitCheckpointId = checkpointId;
     }
 
-    private EffectRecordPayload EffectPayload
+    private CheckpointRecordBehavior CheckpointBehavior
     {
         get
         {
-            if (Kind != TimelineRecordKind.Effect || Payload is not EffectRecordPayload payload)
-                throw new InvalidOperationException("Record is not an effect.");
+            if (Behavior is not CheckpointRecordBehavior behavior)
+                throw new InvalidOperationException("Record is not a checkpoint.");
 
-            return payload;
+            return behavior;
         }
     }
 
-    private CallRecordPayload CallPayload
+    private EffectRecordBehavior EffectBehavior
     {
         get
         {
-            if (Kind != TimelineRecordKind.Call || Payload is not CallRecordPayload payload)
+            if (Behavior is not EffectRecordBehavior behavior)
+                throw new InvalidOperationException("Record is not an effect.");
+
+            return behavior;
+        }
+    }
+
+    private CallRecordBehavior CallBehavior
+    {
+        get
+        {
+            if (Behavior is not CallRecordBehavior behavior)
                 throw new InvalidOperationException("Record is not a call.");
 
-            return payload;
+            return behavior;
         }
     }
 }

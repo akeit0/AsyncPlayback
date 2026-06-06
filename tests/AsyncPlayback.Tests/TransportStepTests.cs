@@ -370,7 +370,7 @@ public sealed class TransportStepTests
         await Assert
             .That(
                 observed.Count(static e =>
-                    e.Record.Kind == TimelineRecordKind.Checkpoint
+                    e.Record.TypeId == TimelineRecordTypes.Checkpoint.Id
                     && e.BoundaryKind == PlaybackBoundaryKind.Point
                     && e.DebugLabel == "start work"
                 )
@@ -862,7 +862,7 @@ public sealed class TransportStepTests
         await playback.RunToEndAsync();
 
         var effect = playback.Records.Single(static record =>
-            record is { Kind: TimelineRecordKind.Effect, DebugLabel: "timed effect" }
+            record.TypeId == TimelineRecordTypes.Effect.Id && record.DebugLabel == "timed effect"
         );
 
         await Assert.That(effect.StartTime).IsEqualTo(TimeSpan.Zero);
@@ -911,7 +911,7 @@ public sealed class TransportStepTests
             .That(
                 observed.Any(static e =>
                     e.Kind == PlaybackEventKind.RecordAdded
-                    && e.Record.Kind == TimelineRecordKind.Checkpoint
+                    && e.Record.TypeId == TimelineRecordTypes.Checkpoint.Id
                     && e.IsRecordAdded
                     && e.BoundaryKind == null
                 )
@@ -946,7 +946,7 @@ public sealed class TransportStepTests
         await Assert
             .That(
                 observed.Select(static e =>
-                    $"{e.Record.Kind}:{e.BoundaryKind}:{e.Time.TotalSeconds:0}"
+                    $"{e.Record.TypeName}:{e.BoundaryKind}:{e.Time.TotalSeconds:0}"
                 )
             )
             .IsEquivalentTo(["Delay:Start:0", "Delay:End:1"]);
@@ -965,14 +965,14 @@ public sealed class TransportStepTests
         await Assert
             .That(
                 observed.Select(static e =>
-                    $"Event : {e.Record.Kind}:{e.BoundaryKind}:{e.DebugLabel}:{e.Time.TotalSeconds:F1}s"
+                    $"Event : {e.Record.TypeName}:{e.BoundaryKind}:{e.DebugLabel}:{e.Time.TotalSeconds:F1}s"
                 )
             )
             .Contains("Event : Delay:Start:Delay:0.0s");
         await Assert
             .That(
                 observed.Select(static e =>
-                    $"Event : {e.Record.Kind}:{e.BoundaryKind}:{e.DebugLabel}:{e.Time.TotalSeconds:F1}s"
+                    $"Event : {e.Record.TypeName}:{e.BoundaryKind}:{e.DebugLabel}:{e.Time.TotalSeconds:F1}s"
                 )
             )
             .Contains("Event : Delay:End:Delay:1.0s");
@@ -1000,7 +1000,7 @@ public sealed class TransportStepTests
         await Assert
             .That(
                 observed.Count(static e =>
-                    e.Record.Kind == TimelineRecordKind.SeekLoop
+                    e.Record.TypeId == TimelineRecordTypes.SeekLoop.Id
                     && e.BoundaryKind == PlaybackBoundaryKind.Start
                 )
             )
@@ -1009,7 +1009,7 @@ public sealed class TransportStepTests
             .That(
                 observed.Any(static e =>
                     e.Kind == PlaybackEventKind.BoundaryReached
-                    && e.Record.Kind == TimelineRecordKind.Delay
+                    && e.Record.TypeId == TimelineRecordTypes.Delay.Id
                     && e.BoundaryKind == PlaybackBoundaryKind.Start
                 )
             )
@@ -1018,7 +1018,7 @@ public sealed class TransportStepTests
             .That(
                 observed.Any(static e =>
                     e.Kind == PlaybackEventKind.CheckpointAdded
-                    && e.Record.Kind != TimelineRecordKind.Checkpoint
+                    && e.Record.TypeId != TimelineRecordTypes.Checkpoint.Id
                 )
             )
             .IsFalse();
@@ -1281,8 +1281,27 @@ public sealed class TransportStepTests
 
         await Assert.That(result.Moved).IsTrue();
         await Assert.That(result.DebugLabel).IsEqualTo("inner");
-        await Assert.That(result.Record?.Kind).IsEqualTo(TimelineRecordKind.Checkpoint);
+        await Assert.That(result.Record?.TypeId).IsEqualTo(TimelineRecordTypes.Checkpoint.Id);
         await Assert.That(result.BoundaryKind).IsEqualTo(PlaybackBoundaryKind.Point);
+    }
+
+    [Test]
+    public async Task CustomRecordType_ParticipatesInBoundariesEvaluationAndExport()
+    {
+        var behavior = new TestTimelineRecordBehavior();
+        var playback = Playback.Start(r => CustomRecordScenario(r, behavior));
+
+        var step = await playback.TryStepForwardAsync(PlaybackStepGranularity.Logical);
+
+        await Assert.That(step.Moved).IsTrue();
+        await Assert.That(step.Record?.TypeId).IsEqualTo(behavior.TypeId);
+        await Assert.That(behavior.Evaluations).IsEqualTo(1);
+        await Assert
+            .That(playback.Records.Single(record => record.TypeId == behavior.TypeId).TypeName)
+            .IsEqualTo(behavior.TypeName);
+        await Assert
+            .That(playback.ExportTimeline().Records.Any(record => record.TypeId == behavior.TypeId))
+            .IsTrue();
     }
 
     [Test]
@@ -1982,6 +2001,48 @@ public sealed class TransportStepTests
         }
 
         await PlaybackTask.Checkpoint();
+    }
+
+    private static async PlaybackTask CustomRecordScenario(
+        Playback playback,
+        TestTimelineRecordBehavior behavior
+    )
+    {
+        playback.AddRecord(behavior, debugLabel: "custom");
+        await playback.Yield();
+    }
+
+    private sealed class TestTimelineRecordBehavior : TimelineRecordBehavior
+    {
+        public TestTimelineRecordBehavior()
+            : base("test.custom", "Custom") { }
+
+        public int Evaluations { get; private set; }
+
+        public override void AddBoundaries(
+            in TimelineRecord record,
+            TimelineBoundaryBuilder builder
+        )
+        {
+            builder.AddPoint(record);
+        }
+
+        public override bool IsEvaluatable(in TimelineRecord record, in RecordEvaluationQuery query)
+        {
+            return record.StartTime == query.Time;
+        }
+
+        public override ValueTask EvaluateAsync(
+            RecordEvaluationContext context,
+            TimelineRecord record,
+            TimeSpan time,
+            PlaybackDirection direction
+        )
+        {
+            Evaluations++;
+            context.MarkEvaluated(record, PlaybackBoundaryKind.Point, time);
+            return ValueTask.CompletedTask;
+        }
     }
 
     private static string Joined(List<string> values)

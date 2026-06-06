@@ -2,7 +2,8 @@ namespace AsyncPlayback;
 
 public readonly record struct TimelineRecordInfo(
     RecordId Id,
-    TimelineRecordKind Kind,
+    string TypeId,
+    string TypeName,
     TimeSpan StartTime,
     TimeSpan Duration,
     string DebugLabel,
@@ -18,13 +19,13 @@ public readonly record struct TimelineRecordInfo(
 
     public bool IsCheckpoint(CheckpointRecordKind kind)
     {
-        return Kind == TimelineRecordKind.Checkpoint && CheckpointKind == kind;
+        return TypeId == TimelineRecordTypes.Checkpoint.Id && CheckpointKind == kind;
     }
 
     public override string ToString()
     {
         var indent = new string(' ', Depth * 2);
         var parent = ParentId is { } id ? $" parent=#{id}" : "";
-        return $"{indent}#{Id} {Kind} {StartTime} - {EndTime}{parent}: {DebugLabel}";
+        return $"{indent}#{Id} {TypeName} {StartTime} - {EndTime}{parent}: {DebugLabel}";
     }
 }

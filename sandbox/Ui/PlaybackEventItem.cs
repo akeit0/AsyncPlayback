@@ -13,12 +13,12 @@ internal sealed record PlaybackEventItem(
     {
         var text =
             e.Kind == PlaybackEventKind.BoundaryReached
-                ? $"Event : {e.Record.Kind}:{e.BoundaryKind}:{e.DebugLabel}:{e.Time.TotalSeconds:F1}s"
-                : $"Event : {e.Kind}:{e.Record.Kind}:{e.DebugLabel}:{e.Time.TotalSeconds:F1}s";
+                ? $"Event : {e.Record.TypeName}:{e.BoundaryKind}:{e.DebugLabel}:{e.Time.TotalSeconds:F1}s"
+                : $"Event : {e.Kind}:{e.Record.TypeName}:{e.DebugLabel}:{e.Time.TotalSeconds:F1}s";
 
         var tooltip =
             $"{e.Kind}\n"
-            + $"Record: #{e.Record.Id.Value} {e.Record.Kind}\n"
+            + $"Record: #{e.Record.Id.Value} {e.Record.TypeName}\n"
             + $"Boundary: {e.BoundaryKind?.ToString() ?? "-"}\n"
             + $"Direction: {e.Direction}\n"
             + $"Time: {e.Time.TotalSeconds:F3}s\n"

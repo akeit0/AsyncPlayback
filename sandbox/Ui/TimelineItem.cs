@@ -57,11 +57,11 @@ internal sealed record TimelineItem(
         {
             var left = TrackInset + record.StartTime.TotalSeconds / duration * contentWidth;
             var effectiveEnd =
-                record.Kind == TimelineRecordKind.Checkpoint
+                record.TypeId == TimelineRecordTypes.Checkpoint.Id
                     ? record.EndTime
                     : Min(record.EndTime, currentTime);
             var width =
-                record.Kind == TimelineRecordKind.Checkpoint
+                record.TypeId == TimelineRecordTypes.Checkpoint.Id
                     ? MinimumRecordWidth
                     : Math.Max(
                         MinimumRecordWidth,
@@ -74,13 +74,13 @@ internal sealed record TimelineItem(
 
             result.Add(
                 new(
-                    $"#{record.Id.Value} {record.Kind}",
+                    $"#{record.Id.Value} {record.TypeName}",
                     record.DebugLabel,
                     FormatTooltip(record),
                     trackWidth,
                     new Thickness(left, 3, 0, 3),
                     width,
-                    BrushFor(record.Kind)
+                    BrushFor(record.TypeId)
                 )
             );
         }
@@ -127,7 +127,7 @@ internal sealed record TimelineItem(
 
     private static string FormatTooltip(TimelineRecordInfo record)
     {
-        return $"#{record.Id.Value} {record.Kind}\n"
+        return $"#{record.Id.Value} {record.TypeName}\n"
             + $"{record.DebugLabel}\n"
             + $"Start: {record.StartTime.TotalSeconds:F3}s\n"
             + $"End: {record.EndTime.TotalSeconds:F3}s\n"
@@ -135,15 +135,25 @@ internal sealed record TimelineItem(
             + $"Checkpoint: {record.CheckpointKind?.ToString() ?? "-"}";
     }
 
-    private static Brush BrushFor(TimelineRecordKind kind)
+    private static Brush BrushFor(string typeId)
     {
-        return kind switch
+        return typeId switch
         {
-            TimelineRecordKind.Checkpoint => new SolidColorBrush(Color.FromArgb(255, 214, 158, 46)),
-            TimelineRecordKind.Delay => new SolidColorBrush(Color.FromArgb(255, 61, 132, 184)),
-            TimelineRecordKind.SeekLoop => new SolidColorBrush(Color.FromArgb(255, 58, 155, 111)),
-            TimelineRecordKind.Effect => new SolidColorBrush(Color.FromArgb(255, 185, 83, 87)),
-            TimelineRecordKind.Call => new SolidColorBrush(Color.FromArgb(255, 114, 105, 168)),
+            var id when id == TimelineRecordTypes.Checkpoint.Id => new SolidColorBrush(
+                Color.FromArgb(255, 214, 158, 46)
+            ),
+            var id when id == TimelineRecordTypes.Delay.Id => new SolidColorBrush(
+                Color.FromArgb(255, 61, 132, 184)
+            ),
+            var id when id == TimelineRecordTypes.SeekLoop.Id => new SolidColorBrush(
+                Color.FromArgb(255, 58, 155, 111)
+            ),
+            var id when id == TimelineRecordTypes.Effect.Id => new SolidColorBrush(
+                Color.FromArgb(255, 185, 83, 87)
+            ),
+            var id when id == TimelineRecordTypes.Call.Id => new SolidColorBrush(
+                Color.FromArgb(255, 114, 105, 168)
+            ),
             _ => new SolidColorBrush(Color.FromArgb(255, 120, 120, 120)),
         };
     }

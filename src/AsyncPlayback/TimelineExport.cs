@@ -36,7 +36,8 @@ public sealed record TimelinePlaybackExport(
 
 public sealed record TimelineRecordExport(
     int Id,
-    string Kind,
+    string TypeId,
+    string TypeName,
     string Label,
     string Visibility,
     int? ParentId,
@@ -130,7 +131,8 @@ public static class TimelineExportExtensions
     {
         return new TimelineRecordExport(
             record.Id,
-            record.Kind.ToString(),
+            record.TypeId,
+            record.TypeName,
             record.DebugLabel,
             record.Visibility.ToString(),
             record.ParentId,

@@ -381,9 +381,11 @@
     function toTimelineItem(record, group) {
       const start = toDate(record.startSeconds);
       const hasDuration = record.durationTicks > 0;
-      const content = record.kind === "Checkpoint"
+      const typeName = record.typeName || record.kind || "";
+      const typeId = record.typeId || typeName;
+      const content = typeName === "Checkpoint"
         ? pointContent(record)
-        : `${kindSymbol(record.kind)} ${escapeHtml(displayLabel(record))}`;
+        : `${kindSymbol(typeName)} ${escapeHtml(displayLabel(record))}`;
 
       return {
         id: record.id,
@@ -392,7 +394,7 @@
         start,
         end: hasDuration ? toDate(record.endSeconds) : undefined,
         type: hasDuration ? "range" : "point",
-        className: String(record.kind || "").toLowerCase(),
+        className: String(typeId || "").toLowerCase(),
         title: tooltip(record)
       };
     }
@@ -410,7 +412,8 @@
     }
 
     function displayLabel(record) {
-      if (record.kind === "Call" && record.label.startsWith("call "))
+      const typeName = record.typeName || record.kind || "";
+      if (typeName === "Call" && record.label.startsWith("call "))
         return record.label.slice("call ".length);
 
       return record.label;
@@ -454,8 +457,9 @@
     function tooltip(record) {
       const parent = record.parentId == null ? "-" : `#${record.parentId}`;
       const delta = record.deltaTime || "-";
+      const typeName = record.typeName || record.kind || "";
       return [
-        `#${record.id} ${record.kind}`,
+        `#${record.id} ${typeName}`,
         displayLabel(record),
         `start: ${record.start}`,
         `end: ${record.end}`,
