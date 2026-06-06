@@ -51,6 +51,39 @@ public sealed class MinimumPlaybackTests
     }
 
     [Test]
+    public async Task Completion_IsMovementBoundary()
+    {
+        var events = new List<string>();
+        var playback = Playback.Create(_ => Scenario(events));
+
+        while (playback.TryMoveNext()) { }
+        await Assert.That(Joined(events)).IsEqualTo("0,1,2,3,4,done");
+        await Assert.That(playback.Current?.Role).IsEqualTo(PlaybackRecordRole.Completed);
+
+        events.Clear();
+        await Assert.That(playback.TryMoveBack()).IsTrue();
+        await Assert.That(Joined(events)).IsEqualTo("done");
+
+        while (playback.TryMoveBack()) { }
+        await Assert.That(Joined(events)).IsEqualTo("done,4,3,2,1,0");
+
+        events.Clear();
+        while (playback.TryMoveNext()) { }
+        await Assert.That(Joined(events)).IsEqualTo("0,1,2,3,4,done");
+
+        static async PlaybackTask Scenario(List<string> events)
+        {
+            for (var i = 0; i < 5; i++)
+            {
+                events.Add(i.ToString());
+                await Checkpoint(i.ToString());
+            }
+
+            events.Add("done");
+        }
+    }
+
+    [Test]
     public async Task NestedTypedTask_ReplaysAfterRepeatedBackAndNext()
     {
         var playback1 = Playback.Create(_ => Scenario(6));

@@ -63,8 +63,8 @@ public sealed class Playback
         IsForward = false;
         var target = cursor;
         var previous = FindPreviousStop(cursor);
-        IsCompleted = false;
         ReplayExisting(previous, target);
+        IsCompleted = false;
         mode = PlaybackMode.Rewriting;
         rewriteFrom = previous + 1;
         cursor = previous;
@@ -132,6 +132,16 @@ public sealed class Playback
 
     internal void OnRootCompleted()
     {
+        const string label = "Completed";
+
+        if (TryConsumeReplayRecord(PlaybackRecordRole.Completed, label, out _))
+        {
+            IsCompleted = true;
+            return;
+        }
+
+        TruncateIfRewriting();
+        AddRecord(PlaybackRecordRole.Completed, label, 0, -1);
         IsCompleted = true;
     }
 
@@ -332,7 +342,10 @@ public sealed class Playback
 
     private bool IsStop(PlaybackRecord record)
     {
-        return record.Role is PlaybackRecordRole.Checkpoint or PlaybackRecordRole.CallEnd;
+        return record.Role
+            is PlaybackRecordRole.Checkpoint
+                or PlaybackRecordRole.CallEnd
+                or PlaybackRecordRole.Completed;
     }
 
     private void EnsureRecordCapacity()

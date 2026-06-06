@@ -18,23 +18,35 @@ Consider this playback program:
 using MinimumPlayback;
 using static MinimumPlayback.PlaybackTask;
 
-var playback = Playback.Create(_ => Scenario());
+var playback = Playback.Create(ForScenario);
 
 Console.WriteLine("-- forward --");
 while (playback.TryMoveNext())
-    Console.WriteLine("th");
+{
+    Console.WriteLine();
+}
 
 Console.WriteLine("-- back --");
 while (playback.TryMoveBack())
-    Console.WriteLine("th");
-
-static async PlaybackTask Scenario()
 {
-    for (var i = 0; i < 5; i++)
+    Console.WriteLine();
+}
+
+Console.WriteLine("-- forward --");
+while (playback.TryMoveNext())
+{
+    Console.WriteLine();
+}
+
+static async PlaybackTask ForScenario(Playback playback)
+{
+    for (var i = 0; i < 3; i++)
     {
         Console.Write(i);
-        await Checkpoint(i.ToString());
+        await Checkpoint();
     }
+
+    Console.Write("done");
 }
 ```
 
@@ -42,17 +54,20 @@ The output is:
 
 ```text
 -- forward --
-0th
-1th
-2th
-3th
-4th
+0
+1
+2
+done
 -- back --
-4th
-3th
-2th
-1th
-0th
+done
+2
+1
+0
+-- forward --
+0
+1
+2
+done
 ```
 
 This is the behavior the project exists to study.  Backward movement is not C#
@@ -65,13 +80,62 @@ Backward movement restores the previous stop, executes the same generated
 `MoveNext()` forward until the current stop is reproduced, consumes that
 current stop, and leaves the cursor at the previous stop.
 
-## State Machine Shape
+## Core Idea
 
-The compiler lowers the loop into one state machine.  The exact generated names
-do not matter.  The important part is where `MoveNext()` resumes.
+C# already compiles an `async` method into a state machine.  That state machine
+has a `MoveNext()` method and fields for locals, awaiters, and the current
+state.
+
+`MinimumPlayback` uses that compiler-generated state machine as the executable
+state.  It captures shallow snapshots of state machines at selected boundaries
+and stores those snapshots as runner-local stops.
+
+The timeline is not the executable state.  The executable state lives in
+`PlaybackRunner<TStateMachine>`:
+
+```text
+runner
+  current state-machine snapshot
+  initial state-machine snapshot
+  stop snapshots[]
+```
+
+The timeline is an indexed debug and movement log:
+
+```text
+record index -> record metadata
+record index -> runner, for resumable stops
+record index -> runner-local stop id, for resumable stops
+```
+
+Movement restores a runner stop, runs `MoveNext()`, and either records new
+records or consumes existing records during replay.
+
+```mermaid
+flowchart LR
+    RecordIndex["record index"]
+    Record["records[index]<br/>role, label, depth, parent"]
+    RunnerMap["runner = recordRunners[index]<br/>for resumable stops"]
+    StopMap["stopId = stopIdsByRecord[index] - 1<br/>for resumable stops"]
+    RunnerStop["runner.stops[stopId]<br/>state-machine snapshot"]
+
+    RecordIndex --> Record
+    RecordIndex --> RunnerMap
+    RecordIndex --> StopMap
+    RunnerMap --> RunnerStop
+    StopMap --> RunnerStop
+```
+
+## Generated State Machine Shape
+
+The compiler lowers the sample loop into one state machine.  The exact generated
+names do not matter; the important part is that locals and the resume point are
+stored as fields, and `MoveNext()` is the only execution entry point.
 
 ```csharp
-private struct ScenarioStateMachine : IAsyncStateMachine
+[StructLayout(LayoutKind.Auto)]
+[CompilerGenerated]
+private struct ForScenarioStateMachine : IAsyncStateMachine
 {
     public int state;
     public PlaybackTaskMethodBuilder builder;
@@ -81,76 +145,75 @@ private struct ScenarioStateMachine : IAsyncStateMachine
 
     private void MoveNext()
     {
-        if (state != 0)
-            i = 0;
-        else
+        var num = state;
+
+        try
         {
+            if (num != 0)
+            {
+                i = 0;
+                goto LoopTest;
+            }
+
             var awaiter = checkpointAwaiter;
             checkpointAwaiter = default;
-            state = -1;
+            num = state = -1;
+
+        ResumeAfterCheckpoint:
             awaiter.GetResult();
             i++;
-        }
 
-        if (i < 5)
-        {
-            Console.Write(i);
-            var awaiter = PlaybackTask.Checkpoint().GetAwaiter();
-            if (!awaiter.IsCompleted)
+        LoopTest:
+            if (i < 3)
             {
-                state = 0;
-                checkpointAwaiter = awaiter;
-                builder.AwaitUnsafeOnCompleted(ref awaiter, ref this);
-                return;
+                Console.Write(i);
+                awaiter = PlaybackTask.Checkpoint().GetAwaiter();
+                if (!awaiter.IsCompleted)
+                {
+                    num = state = 0;
+                    checkpointAwaiter = awaiter;
+                    builder.AwaitUnsafeOnCompleted(ref awaiter, ref this);
+                    return;
+                }
+
+                goto ResumeAfterCheckpoint;
             }
+
+            Console.Write("done");
+        }
+        catch (Exception exception)
+        {
+            state = -2;
+            builder.SetException(exception);
+            return;
         }
 
         state = -2;
         builder.SetResult();
     }
+
+    void IAsyncStateMachine.MoveNext()
+    {
+        MoveNext();
+    }
+
+    void IAsyncStateMachine.SetStateMachine(IAsyncStateMachine stateMachine)
+    {
+        builder.SetStateMachine(stateMachine);
+    }
 }
 ```
 
-The important fields are:
+The relevant fields are:
 
 ```text
-state              resume point
-i                  loop local
-checkpointAwaiter  awaiter field used across suspension
+state              compiler resume point
+i                  user loop local
+checkpointAwaiter  awaiter field held across suspension
 builder            custom PlaybackTask builder
 ```
 
-The generated method has two areas that matter for this example:
-
-```text
-Entry area:
-  i = 0
-  Console.Write(i)
-  await Checkpoint()
-  capture stop with state=0, i=0
-
-Resume area:
-  checkpointAwaiter.GetResult()
-  i++
-  Console.Write(i)
-  await Checkpoint()
-  capture stop with state=0, i=current
-```
-
-After a full forward run, the stored stops are:
-
-```text
-record 0 -> stop0(state=0, i=0)
-record 1 -> stop1(state=0, i=1)
-record 2 -> stop2(state=0, i=2)
-record 3 -> stop3(state=0, i=3)
-record 4 -> stop4(state=0, i=4)
-```
-
-The write happens before the stop is captured.  Restoring `stop0` and running
-`MoveNext()` continues after checkpoint `0`; it prints `1`, not `0`.
-
-## State-Machine Transitions
+## State-Machine Transition Example
 
 For this loop, the meaningful state is the pair:
 
@@ -159,50 +222,14 @@ For this loop, the meaningful state is the pair:
 ```
 
 `state` is the compiler resume point.  `i` is the user loop local.  The stored
-playback stops are snapshots of that pair.
+playback stops are snapshots of that pair:
 
 ```text
-initial = (state=-1, i=undefined)
-stop0   = (state=0,  i=0)
-stop1   = (state=0,  i=1)
-stop2   = (state=0,  i=2)
-stop3   = (state=0,  i=3)
-stop4   = (state=0,  i=4)
-done    = (state=-2, i=5)
-```
-
-The generated state-machine transition is always forward:
-
-```text
-initial -> stop0
-stop0   -> stop1
-stop1   -> stop2
-stop2   -> stop3
-stop3   -> stop4
-stop4   -> done
-```
-
-Forward and backward movement use the same generated transition arrows:
-
-```text
-TryMoveNext from cursor 2:
-  restore stop2
-  execute stop2 -> stop3
-  print 3
-  cursor becomes 3
-
-TryMoveBack from cursor 3:
-  restore stop2
-  execute stop2 -> stop3
-  print 3
-  consume existing stop3
-  cursor becomes 2
-```
-
-So both operations execute the same state-machine transition:
-
-```text
-stop2(state=0, i=2) -> stop3(state=0, i=3)
+initial   = (state=-1, i=undefined)
+stop0     = (state=0,  i=0)
+stop1     = (state=0,  i=1)
+stop2     = (state=0,  i=2)
+Completed = (state=-2, i=3)
 ```
 
 Direction changes timeline bookkeeping, not the generated `MoveNext()`
@@ -214,22 +241,17 @@ flowchart TD
     S0["stop0<br/>(state=0, i=0)"]
     S1["stop1<br/>(state=0, i=1)"]
     S2["stop2<br/>(state=0, i=2)"]
-    S3["stop3<br/>(state=0, i=3)"]
-    S4["stop4<br/>(state=0, i=4)"]
-    D["done<br/>(state=-2, i=5)"]
+    C["Completed<br/>(state=-2, i=3)"]
 
     I -->|"MoveNext entry<br/>write 0"| S0
     S0 -->|"MoveNext resume<br/>i++ ; write 1"| S1
     S1 -->|"MoveNext resume<br/>i++ ; write 2"| S2
-    S2 -->|"MoveNext resume<br/>i++ ; write 3"| S3
-    S3 -->|"MoveNext resume<br/>i++ ; write 4"| S4
-    S4 -->|"MoveNext resume<br/>i++ ; complete"| D
+    S2 -->|"MoveNext resume<br/>i++ ; write done<br/>SetResult"| C
 
     S0 -. "back: replay initial to stop0<br/>cursor becomes -1" .-> I
     S1 -. "back: replay stop0 to stop1<br/>cursor becomes 0" .-> S0
     S2 -. "back: replay stop1 to stop2<br/>cursor becomes 1" .-> S1
-    S3 -. "back: replay stop2 to stop3<br/>cursor becomes 2" .-> S2
-    S4 -. "back: replay stop3 to stop4<br/>cursor becomes 3" .-> S3
+    C -. "back: replay stop2 to Completed<br/>cursor becomes 2" .-> S2
 ```
 
 Read each solid arrow as a forward `MoveNext` transition.  Read each dotted
@@ -280,90 +302,17 @@ Call In                 // enter Fib(2)
   CallEnd Out           // Fib(0) returned
 CallEnd Out             // Fib(2) returned
 Checkpoint end=1
+Completed              // root method returned
 ```
 
-Only `Checkpoint` and `CallEnd` are movement stops.  `Call` records are
-structural.  They make the debug hierarchy visible, but movement never lands on
-them.
+`Checkpoint`, `CallEnd`, and `Completed` are movement stops.  `Call` records
+are structural.  They make the debug hierarchy visible, but movement never
+lands on them.
 
 Forward movement runs from one stop to the next:
 
 ```text
-start -> fib(2) -> fib(1) -> CallEnd -> fib(0) -> CallEnd -> CallEnd -> end=1
-```
-
-This is the central idea of the whole project:
-
-```text
-move back = restore previous stop + replay forward to current stop
-```
-
-## High-Level Shape
-
-```mermaid
-flowchart TD
-    UserCode["User async method<br/>PlaybackTask / PlaybackTask<T>"]
-    Compiler["C# compiler async lowering<br/>IAsyncStateMachine.MoveNext"]
-    Builder["PlaybackTaskMethodBuilder<br/>Start / AwaitOnCompleted / SetResult"]
-    Runner["PlaybackRunner<TStateMachine><br/>current, initial, stops[]"]
-    Promise["PlaybackPromise<br/>result, completion, parent stop"]
-    Timeline["Playback timeline<br/>records[], recordRunners[], stopIdsByRecord[]"]
-
-    UserCode --> Compiler
-    Compiler --> Builder
-    Builder --> Runner
-    Builder --> Promise
-    Runner --> Timeline
-    Promise --> Runner
-    Timeline --> Runner
-```
-
-The compiler-generated state machine is the executable state.  The timeline is
-an index over recorded movement/debug records and runner-local stop snapshots.
-
-## Core Idea
-
-C# already compiles an `async` method into a state machine.  That state machine
-has a `MoveNext()` method and fields for locals, awaiters, and the current state.
-
-`MinimumPlayback` uses that compiler-generated state machine as the execution
-state.  It captures shallow snapshots of state machines at selected boundaries
-and stores those snapshots as runner-local stops.
-
-The timeline is not the executable state.  The executable state lives in
-`PlaybackRunner<TStateMachine>`:
-
-```text
-runner
-  current state-machine snapshot
-  initial state-machine snapshot
-  stop snapshots[]
-```
-
-The timeline is an indexed debug and movement log:
-
-```text
-record index -> record metadata
-record index -> runner
-record index -> runner-local stop id
-```
-
-Movement restores a runner stop, runs `MoveNext()`, and either records new
-records or consumes existing records during replay.
-
-```mermaid
-flowchart LR
-    RecordIndex["record index"]
-    Record["records[index]<br/>role, label, depth, parent"]
-    RunnerMap["recordRunners[index]"]
-    StopMap["stopIdsByRecord[index] - 1"]
-    RunnerStop["runner.stops[stopId]<br/>state-machine snapshot"]
-
-    RecordIndex --> Record
-    RecordIndex --> RunnerMap
-    RecordIndex --> StopMap
-    RunnerMap --> RunnerStop
-    StopMap --> RunnerStop
+start -> fib(2) -> fib(1) -> CallEnd -> fib(0) -> CallEnd -> CallEnd -> end=1 -> Completed
 ```
 
 ## C# Async Lowering
@@ -426,27 +375,8 @@ SetException(...)
 Those callbacks are the only place where `MinimumPlayback` integrates with C#
 async execution.
 
-```mermaid
-sequenceDiagram
-    participant Compiler as Compiler-generated MoveNext
-    participant Builder as PlaybackTaskMethodBuilder
-    participant Runner as PlaybackRunner
-    participant Playback as Playback
-    participant Promise as PlaybackPromise
-
-    Compiler->>Builder: Start(ref stateMachine)
-    Builder->>Runner: create runner and MoveNext()
-    Compiler->>Builder: AwaitOnCompleted(ref awaiter, ref stateMachine)
-    alt await Checkpoint
-        Builder->>Runner: CaptureCheckpoint(ref stateMachine)
-        Runner->>Playback: AddCheckpoint(runner, stopId, label)
-    else await child PlaybackTask
-        Builder->>Runner: CaptureAwait(ref parentStateMachine)
-        Builder->>Promise: AddContinuation(parentRunner, stopId)
-    end
-    Compiler->>Builder: SetResult(...)
-    Builder->>Promise: TrySetResult(...)
-```
+The builder turns those callbacks into runner creation, stop capture, promise
+completion, and timeline records.
 
 ## Runtime Scope
 
@@ -500,7 +430,7 @@ Rewriting  next forward move truncates and rebuilds after a back step
 Replaying  existing records are consumed, not appended
 ```
 
-### PlaybackRunner<TStateMachine>
+### PlaybackRunner\<TStateMachine\>
 
 Each async method invocation gets a runner:
 
@@ -572,10 +502,13 @@ Roles:
 Checkpoint  explicit user checkpoint; movement stop
 Call        structural call entry; debug hierarchy only
 CallEnd     child completion boundary; movement stop
+Completed   root completion boundary; movement stop
 ```
 
-Only `Checkpoint` and `CallEnd` are stops.  `Call` is structural and is not a
-movement target.
+`Checkpoint`, `CallEnd`, and `Completed` are stops.  `Call` is structural and
+is not a movement target.  `Completed` has no runner-local stop id because the
+runtime never restores from completion; it only lands on it or replays into it
+while moving back.
 
 ```mermaid
 flowchart TD
@@ -583,10 +516,12 @@ flowchart TD
     Checkpoint["Checkpoint<br/>movement stop<br/>has runner + stop id"]
     Call["Call<br/>structural only<br/>no stop id"]
     CallEnd["CallEnd<br/>movement stop<br/>has runner + stop id"]
+    Completed["Completed<br/>movement stop<br/>no stop id"]
 
     Timeline --> Checkpoint
     Timeline --> Call
     Timeline --> CallEnd
+    Timeline --> Completed
 ```
 
 The parent rules are:
@@ -659,6 +594,17 @@ record is Checkpoint
 
 The difference is that a checkpoint restore sets `CurrentRecordIndex`, while a
 call-end resume continues the parent from an await snapshot.
+
+For root completion:
+
+```text
+root runner completes
+  playback.AddCompleted() -> record index
+```
+
+Completion is a boundary, but not a resumable state.  Moving back from
+completion restores the previous stop and replays forward until the completion
+record is consumed.
 
 ```mermaid
 sequenceDiagram
@@ -830,8 +776,8 @@ flowchart TD
 
 ## Existing-Record Replay
 
-During `PlaybackMode.Replaying`, `AddCheckpoint`, `AddCall`, and `AddCallEnd`
-do not append records.  They consume the next existing record:
+During `PlaybackMode.Replaying`, `AddCheckpoint`, `AddCall`, `AddCallEnd`, and
+root completion do not append records.  They consume the next existing record:
 
 ```text
 expected index = replayConsumeIndex
@@ -857,7 +803,7 @@ the segment can be replayed forward to that same stop.
 flowchart LR
     Existing["existing records"]
     ReplayIndex["replayConsumeIndex"]
-    Operation["record operation<br/>AddCheckpoint/AddCall/AddCallEnd"]
+    Operation["record operation<br/>AddCheckpoint/AddCall/AddCallEnd/Completed"]
     Match{"role + label match?"}
     Consume["consume record<br/>replayConsumeIndex++"]
     Error["throw"]
@@ -1010,6 +956,10 @@ Every CallEnd record has:
   recordRunners[index] != null
   stopIdsByRecord[index] != 0
 
+Every Completed record has:
+  recordRunners[index] == null
+  stopIdsByRecord[index] == 0
+
 Call records are structural:
   they do not require a stop id
   they are not movement targets
@@ -1079,6 +1029,7 @@ C# async method
   -> forward movement restores/resumes and runs MoveNext
   -> backward movement restores previous stop and replays forward to current stop
   -> call-end stops make nested await completion explicit
+  -> completed stops make root completion explicit
 ```
 
 The timeline is not the source of truth for execution state.  It is an index
