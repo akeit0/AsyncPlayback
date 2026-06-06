@@ -6,7 +6,7 @@ internal class CloneUtility
 {
     public static T Clone<T>(T obj)
     {
-        var cloneable = Unsafe.As<CloneUtility>((object)obj!);
+        var cloneable = Unsafe.As<T, CloneUtility>(ref obj);
         return (T)cloneable.MemberwiseClone();
     }
 }
