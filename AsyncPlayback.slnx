@@ -12,5 +12,6 @@
     </Folder>
     <Folder Name="/tests/">
         <Project Path="tests/AsyncPlayback.Tests/AsyncPlayback.Tests.csproj" />
+        <Project Path="tests/MinimumPlayback.Tests/MinimumPlayback.Tests.csproj" />
     </Folder>
 </Solution>

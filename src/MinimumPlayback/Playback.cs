@@ -25,13 +25,6 @@ public sealed class Playback
         return new() { entry = entry };
     }
 
-    public static Playback Start(Func<Playback, PlaybackTask> entry)
-    {
-        var playback = new Playback();
-        playback.StartCore(entry);
-        return playback;
-    }
-
     public CheckpointAwaitable Checkpoint(string label = "Checkpoint")
     {
         if (!ReferenceEquals(PlaybackRuntime.CurrentPlayback, this))

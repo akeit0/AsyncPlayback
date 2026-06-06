@@ -28,8 +28,8 @@ static async PlaybackTask ForScenario(Playback playback)
     }
 }
 
-var playback1 = Playback.Start(playback => Scenario(playback, 6));
-var playback2 = Playback.Start(playback => Scenario(playback, 4));
+var playback1 = Playback.Create(playback => Scenario(playback, 6));
+var playback2 = Playback.Create(playback => Scenario(playback, 4));
 
 for (var i = 0; i < 128 && (!playback1.IsCompleted || !playback2.IsCompleted); i++)
 {
