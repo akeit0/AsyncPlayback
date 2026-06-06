@@ -27,7 +27,7 @@ public abstract class PlaybackPromiseBase
 
     public TimeSpan StartTime { get; set; }
     public TimeSpan Duration { get; set; }
-    public TimeSpan DueTime { get; set; }
+    public TimeSpan DueTime => StartTime + Duration;
     internal int? OwnerRecordIndex { get; set; }
 
     public bool IsCompleted => status != PromiseStatus.Pending;
@@ -214,6 +214,13 @@ internal sealed class PlaybackPromise : PlaybackPromiseBase
 {
     internal PlaybackPromise(Playback playback, Playback.IPlaybackAwaitBehavior awaitBehavior)
         : base(playback, awaitBehavior) { }
+
+    internal static PlaybackPromise FromException(Playback playback, Exception exception)
+    {
+        var promise = new PlaybackPromise(playback, Playback.YieldAwaitBehavior.Instance);
+        promise.TrySetException(exception ?? throw new ArgumentNullException(nameof(exception)));
+        return promise;
+    }
 
     public bool TrySetResult()
     {

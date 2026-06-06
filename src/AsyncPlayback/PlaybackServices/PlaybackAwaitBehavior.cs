@@ -92,7 +92,7 @@ public sealed partial class Playback
         ) { }
     }
 
-    private sealed class YieldAwaitBehavior : IPlaybackAwaitBehavior
+    internal sealed class YieldAwaitBehavior : IPlaybackAwaitBehavior
     {
         public static YieldAwaitBehavior Instance { get; } = new();
 

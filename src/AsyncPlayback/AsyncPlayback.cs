@@ -209,7 +209,6 @@ public sealed partial class Playback
         {
             StartTime = Time,
             Duration = TimeSpan.Zero,
-            DueTime = Time,
         };
 
         Post(promise, CompletePromise);
@@ -228,7 +227,6 @@ public sealed partial class Playback
         {
             StartTime = record.StartTime,
             Duration = record.Duration,
-            DueTime = record.EndTime,
             OwnerRecordIndex = record.FlatIndex,
         };
 
@@ -267,7 +265,7 @@ public sealed partial class Playback
             {
                 var revertFailure = StartReplayRevertEffect(revert);
                 if (revertFailure != null)
-                    return PlaybackTask.FromException(revertFailure);
+                    return PlaybackTask.FromException(this, revertFailure);
             }
 
             return PlaybackTask.SuspendReplayAt(record.FlatIndex);
@@ -277,7 +275,6 @@ public sealed partial class Playback
         {
             StartTime = record.StartTime,
             Duration = record.Duration,
-            DueTime = record.EndTime,
             OwnerRecordIndex = record.FlatIndex,
         };
 
@@ -306,7 +303,6 @@ public sealed partial class Playback
         {
             StartTime = record.StartTime,
             Duration = record.Duration,
-            DueTime = record.EndTime,
             OwnerRecordIndex = record.FlatIndex,
         };
 
@@ -355,7 +351,6 @@ public sealed partial class Playback
         {
             StartTime = record.StartTime,
             Duration = record.Duration,
-            DueTime = record.EndTime,
             OwnerRecordIndex = ownerRecord.FlatIndex,
         };
 

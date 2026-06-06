@@ -158,7 +158,6 @@ public sealed partial class Playback
             record.Complete(record.StartTime + elapsed);
             timeline.Invalidate();
             promise.Duration = record.Duration;
-            promise.DueTime = record.EndTime;
             MoveTimeTo(record.EndTime);
         }
     }

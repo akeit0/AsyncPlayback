@@ -6,7 +6,6 @@ namespace AsyncPlayback;
 public readonly partial struct PlaybackTask
 {
     internal readonly PlaybackPromise? Promise;
-    private readonly Exception? exception;
     private readonly bool completed;
     private readonly bool replaySuspended;
     private readonly int replayOwnerRecordIndex;
@@ -14,16 +13,14 @@ public readonly partial struct PlaybackTask
     internal PlaybackTask(PlaybackPromise promise)
     {
         Promise = promise;
-        exception = null;
         completed = false;
         replaySuspended = false;
         replayOwnerRecordIndex = -1;
     }
 
-    private PlaybackTask(bool completed, Exception? exception = null)
+    private PlaybackTask(bool completed)
     {
         Promise = null;
-        this.exception = exception;
         this.completed = completed;
         replaySuspended = false;
         replayOwnerRecordIndex = -1;
@@ -39,15 +36,14 @@ public readonly partial struct PlaybackTask
     private PlaybackTask(int ownerRecordIndex)
     {
         Promise = null;
-        exception = null;
         completed = false;
         replaySuspended = true;
         replayOwnerRecordIndex = ownerRecordIndex;
     }
 
-    internal static PlaybackTask FromException(Exception exception)
+    internal static PlaybackTask FromException(Playback playback, Exception exception)
     {
-        return new(true, exception ?? throw new ArgumentNullException(nameof(exception)));
+        return new(PlaybackPromise.FromException(playback, exception));
     }
 
     public Awaiter GetAwaiter()
@@ -55,13 +51,12 @@ public readonly partial struct PlaybackTask
         if (Promise == null && !completed && !replaySuspended)
             throw new InvalidOperationException("Default PlaybackTask cannot be awaited.");
 
-        return new(Promise, completed, exception, replaySuspended, replayOwnerRecordIndex);
+        return new(Promise, completed, replaySuspended, replayOwnerRecordIndex);
     }
 
     public readonly struct Awaiter : ICriticalNotifyCompletion, IPlaybackAwaiter
     {
         private readonly PlaybackPromise? promise;
-        private readonly Exception? exception;
         private readonly bool completed;
         private readonly bool replaySuspended;
         private readonly int replayOwnerRecordIndex;
@@ -69,14 +64,12 @@ public readonly partial struct PlaybackTask
         internal Awaiter(
             PlaybackPromise? promise,
             bool completed,
-            Exception? exception,
             bool replaySuspended,
             int replayOwnerRecordIndex
         )
         {
             this.promise = promise;
             this.completed = completed;
-            this.exception = exception;
             this.replaySuspended = replaySuspended;
             this.replayOwnerRecordIndex = replayOwnerRecordIndex;
         }
@@ -89,9 +82,6 @@ public readonly partial struct PlaybackTask
 
         public void GetResult()
         {
-            if (exception != null)
-                throw exception;
-
             if (replaySuspended)
                 throw new InvalidOperationException(
                     "Replay suspension cannot be completed directly."
