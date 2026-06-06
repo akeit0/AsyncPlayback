@@ -87,13 +87,10 @@ public sealed class MinimumPlaybackTests
     }
 
     [Test]
-    public async Task StopOnCallEnd_StopsBeforeParentContinuation()
+    public async Task CallEnd_StopsBeforeParentContinuation()
     {
         var events = new List<string>();
-        var playback = Playback.Create(
-            _ => CallEndScenario(events),
-            new PlaybackOptions(StopOnCallEnd: true)
-        );
+        var playback = Playback.Create(_ => CallEndScenario(events));
 
         await Assert.That(playback.TryMoveNext()).IsTrue();
         await Assert.That(playback.Current?.Label).IsEqualTo("start");
@@ -113,12 +110,9 @@ public sealed class MinimumPlaybackTests
     }
 
     [Test]
-    public async Task StopOnCallEnd_CanMoveBackFromNestedCallEnd()
+    public async Task CallEnd_CanMoveBackFromNestedCallEnd()
     {
-        var playback = Playback.Create(
-            _ => StartingFibScenario(6),
-            new PlaybackOptions(StopOnCallEnd: true)
-        );
+        var playback = Playback.Create(_ => StartingFibScenario(6));
 
         while (playback.TryMoveNext())
         {

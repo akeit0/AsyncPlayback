@@ -4,8 +4,7 @@ public sealed class Playback
 {
     private PlaybackRecord[] records = [];
     private IPlaybackRunner?[] recordRunners = [];
-    private int[] checkpointIdsByRecord = [];
-    private int[] continuationIdsByRecord = [];
+    private int[] stopIdsByRecord = [];
     private int recordCount;
     private IPlaybackRunner? rootRunner;
     private Func<Playback, PlaybackTask>? entry;
@@ -78,12 +77,12 @@ public sealed class Playback
         rootRunner ??= runner;
     }
 
-    internal int AddCheckpoint(IPlaybackRunner runner, int checkpointId, string label)
+    internal int AddCheckpoint(IPlaybackRunner runner, int stopId, string label)
     {
         if (TryConsumeReplayRecord(PlaybackRecordRole.Checkpoint, label, out var replayRecord))
         {
             recordRunners[replayRecord.Index] = runner;
-            checkpointIdsByRecord[replayRecord.Index] = checkpointId + 1;
+            stopIdsByRecord[replayRecord.Index] = stopId + 1;
             return replayRecord.Index;
         }
 
@@ -95,7 +94,7 @@ public sealed class Playback
             runner.CallRecordIndex ?? -1
         );
         recordRunners[record.Index] = runner;
-        checkpointIdsByRecord[record.Index] = checkpointId + 1;
+        stopIdsByRecord[record.Index] = stopId + 1;
         return record.Index;
     }
 
@@ -113,21 +112,21 @@ public sealed class Playback
         ).Index;
     }
 
-    internal int AddCallEnd(IPlaybackRunner runner, int continuationId, int callRecordIndex)
+    internal int AddCallEnd(IPlaybackRunner runner, int stopId, int callRecordIndex)
     {
         const string label = "Out";
 
         if (TryConsumeReplayRecord(PlaybackRecordRole.CallEnd, label, out var replayRecord))
         {
             recordRunners[replayRecord.Index] = runner;
-            continuationIdsByRecord[replayRecord.Index] = continuationId + 1;
+            stopIdsByRecord[replayRecord.Index] = stopId + 1;
             return replayRecord.Index;
         }
 
         TruncateIfRewriting();
         var record = AddRecord(PlaybackRecordRole.CallEnd, label, runner.Depth, callRecordIndex);
         recordRunners[record.Index] = runner;
-        continuationIdsByRecord[record.Index] = continuationId + 1;
+        stopIdsByRecord[record.Index] = stopId + 1;
         return record.Index;
     }
 
@@ -214,17 +213,17 @@ public sealed class Playback
             return runner;
         }
 
-        return RestoreCheckpoint(record);
+        return RestoreStop(record);
     }
 
-    private IPlaybackRunner RestoreCheckpoint(PlaybackRecord record)
+    private IPlaybackRunner RestoreStop(PlaybackRecord record)
     {
         var runner = GetRunner(record);
-        var checkpointKey = checkpointIdsByRecord[record.Index];
-        if (checkpointKey == 0)
-            throw new InvalidOperationException("Record checkpoint was not found.");
+        var stopKey = stopIdsByRecord[record.Index];
+        if (stopKey == 0)
+            throw new InvalidOperationException("Record stop was not found.");
 
-        runner.RestoreCheckpoint(checkpointKey - 1, record.Index);
+        runner.RestoreStop(stopKey - 1, record.Index);
         return runner;
     }
 
@@ -232,11 +231,11 @@ public sealed class Playback
     {
         if (recordIndex >= 0 && records[recordIndex].Role == PlaybackRecordRole.CallEnd)
         {
-            var continuationKey = continuationIdsByRecord[recordIndex];
-            if (continuationKey == 0)
-                throw new InvalidOperationException("Call end continuation was not found.");
+            var stopKey = stopIdsByRecord[recordIndex];
+            if (stopKey == 0)
+                throw new InvalidOperationException("Record stop was not found.");
 
-            runner.ResumeContinuation(continuationKey - 1);
+            runner.ResumeStop(stopKey - 1);
             return;
         }
 
@@ -306,8 +305,7 @@ public sealed class Playback
         {
             Array.Clear(records, index, recordCount - index);
             Array.Clear(recordRunners, index, recordCount - index);
-            Array.Clear(checkpointIdsByRecord, index, recordCount - index);
-            Array.Clear(continuationIdsByRecord, index, recordCount - index);
+            Array.Clear(stopIdsByRecord, index, recordCount - index);
             recordCount = index;
         }
         rewriteFrom = -1;
@@ -345,8 +343,7 @@ public sealed class Playback
         var capacity = records.Length == 0 ? 8 : records.Length * 2;
         Array.Resize(ref records, capacity);
         Array.Resize(ref recordRunners, capacity);
-        Array.Resize(ref checkpointIdsByRecord, capacity);
-        Array.Resize(ref continuationIdsByRecord, capacity);
+        Array.Resize(ref stopIdsByRecord, capacity);
     }
 
     private enum PlaybackMode

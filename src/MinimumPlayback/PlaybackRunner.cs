@@ -10,10 +10,10 @@ internal interface IPlaybackRunner
     void AddChild(IPlaybackRunner child);
     void MoveNext();
     void RestoreInitial();
-    void RestoreCheckpoint(int checkpointId, int recordIndex);
+    void RestoreStop(int stopId, int recordIndex);
     void ResetForReplay();
-    void ResumeContinuation(int continuationId);
-    void CompleteAwait(int continuationId, int callRecordIndex);
+    void ResumeStop(int stopId);
+    void CompleteAwait(int stopId, int callRecordIndex);
     void MarkCompleted();
 }
 
@@ -25,12 +25,10 @@ internal sealed class PlaybackRunner<TStateMachine> : IPlaybackRunner
     private readonly IPlaybackRunner? parent;
     private IPlaybackRunner[] children = [];
     private int childCount;
-    private TStateMachine[] checkpoints = [];
-    private TStateMachine[] continuations = [];
+    private TStateMachine[] stops = [];
     private TStateMachine initial = default!;
     private TStateMachine current = default!;
-    private int nextCheckpointId;
-    private int continuationCount;
+    private int stopCount;
 
     public PlaybackRunner(Playback playback, PlaybackPromise promise, IPlaybackRunner? parent)
     {
@@ -71,10 +69,10 @@ internal sealed class PlaybackRunner<TStateMachine> : IPlaybackRunner
         CurrentRecordIndex = null;
     }
 
-    public void RestoreCheckpoint(int checkpointId, int recordIndex)
+    public void RestoreStop(int stopId, int recordIndex)
     {
         ResetForReplay();
-        current = SnapshotStateMachine(checkpoints[checkpointId]);
+        current = SnapshotStateMachine(stops[stopId]);
         CurrentRecordIndex = recordIndex;
     }
 
@@ -86,10 +84,8 @@ internal sealed class PlaybackRunner<TStateMachine> : IPlaybackRunner
     public int CaptureCheckpoint(ref TStateMachine stateMachine, string label)
     {
         current = SnapshotStateMachine(stateMachine);
-        var checkpointId = nextCheckpointId++;
-        EnsureCheckpointCapacity(checkpointId + 1);
-        checkpoints[checkpointId] = current;
-        var recordIndex = playback.AddCheckpoint(this, checkpointId, label);
+        var stopId = AddStop(ref current);
+        var recordIndex = playback.AddCheckpoint(this, stopId, label);
         CurrentRecordIndex = recordIndex;
         return recordIndex;
     }
@@ -98,21 +94,18 @@ internal sealed class PlaybackRunner<TStateMachine> : IPlaybackRunner
     {
         var awaitState = SnapshotStateMachine(stateMachine);
         current = awaitState;
-        var continuationId = continuationCount++;
-        EnsureContinuationCapacity(continuationId + 1);
-        continuations[continuationId] = awaitState;
-        return continuationId;
+        return AddStop(ref awaitState);
     }
 
-    public void ResumeContinuation(int continuationId)
+    public void ResumeStop(int stopId)
     {
-        current = SnapshotStateMachine(continuations[continuationId]);
+        current = SnapshotStateMachine(stops[stopId]);
         MoveNext();
     }
 
-    public void CompleteAwait(int continuationId, int callRecordIndex)
+    public void CompleteAwait(int stopId, int callRecordIndex)
     {
-        playback.AddCallEnd(this, continuationId, callRecordIndex);
+        playback.AddCallEnd(this, stopId, callRecordIndex);
     }
 
     public void CaptureReplaySuspension(ref TStateMachine stateMachine, int ownerRecordIndex)
@@ -146,25 +139,22 @@ internal sealed class PlaybackRunner<TStateMachine> : IPlaybackRunner
         Array.Resize(ref children, children.Length == 0 ? 4 : children.Length * 2);
     }
 
-    private void EnsureCheckpointCapacity(int required)
+    private int AddStop(ref TStateMachine state)
     {
-        if (required <= checkpoints.Length)
-            return;
-
-        var capacity = checkpoints.Length == 0 ? 4 : checkpoints.Length;
-        while (capacity < required)
-            capacity *= 2;
-        Array.Resize(ref checkpoints, capacity);
+        var stopId = stopCount++;
+        EnsureStopCapacity(stopId + 1);
+        stops[stopId] = state;
+        return stopId;
     }
 
-    private void EnsureContinuationCapacity(int required)
+    private void EnsureStopCapacity(int required)
     {
-        if (required <= continuations.Length)
+        if (required <= stops.Length)
             return;
 
-        var capacity = continuations.Length == 0 ? 4 : continuations.Length;
+        var capacity = stops.Length == 0 ? 4 : stops.Length;
         while (capacity < required)
             capacity *= 2;
-        Array.Resize(ref continuations, capacity);
+        Array.Resize(ref stops, capacity);
     }
 }
