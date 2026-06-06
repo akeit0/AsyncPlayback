@@ -3,7 +3,7 @@ using System.Runtime.CompilerServices;
 namespace MinimumPlayback;
 
 [AsyncMethodBuilder(typeof(PlaybackTaskMethodBuilder))]
-public readonly struct PlaybackTask
+public readonly partial struct PlaybackTask
 {
     private readonly PlaybackPromise? promise;
     private readonly bool replaySuspended;

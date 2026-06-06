@@ -1,29 +1,28 @@
 using MinimumPlayback;
+using static MinimumPlayback.PlaybackTask;
 
-var playback1 = Playback.Start(playback => Scenario(playback, "A", 6));
-var playback2 = Playback.Start(playback => Scenario(playback, "B", 3));
-
-MoveNext(playback1, "p1");
-MoveNext(playback1, "p1");
-MoveNext(playback2, "p2");
-MoveBack(playback1, "p1");
-MoveNext(playback2, "p2");
-MoveNext(playback1, "p1");
-MoveNext(playback2, "p2");
-MoveBack(playback2, "p2");
-MoveNext(playback1, "p1");
-MoveNext(playback2, "p2");
+var playback1 = Playback.Start(playback => Scenario(playback, 6));
+var playback2 = Playback.Start(playback => Scenario(playback, 4));
 
 for (var i = 0; i < 128 && (!playback1.IsCompleted || !playback2.IsCompleted); i++)
 {
+    var moveBackTurn = i % 3 == 2;
     if ((i & 1) == 0)
     {
         if (!playback1.IsCompleted)
-            MoveNext(playback1, "p1");
+        {
+            if (moveBackTurn)
+                MoveBack(playback1, "p1");
+            else
+                MoveNext(playback1, "p1");
+        }
     }
     else if (!playback2.IsCompleted)
     {
-        MoveNext(playback2, "p2");
+        if (moveBackTurn)
+            MoveBack(playback2, "p2");
+        else
+            MoveNext(playback2, "p2");
     }
 }
 
@@ -32,27 +31,25 @@ Dump(playback1);
 Console.WriteLine("-- records p2 --");
 Dump(playback2);
 
-static async PlaybackTask Scenario(Playback playback, string name, int n)
+static async PlaybackTask Scenario(Playback playback, int n)
 {
-    await playback.Checkpoint($"{name}:start");
-    var value = await Fib(playback, name, n);
-    await playback.Checkpoint($"{name}:end={value}");
+    await Checkpoint($"start");
+    var value = await Fib(n);
+    await Checkpoint($"end={value}");
 }
 
-static async PlaybackTask<int> Fib(Playback playback, string name, int n)
+static async PlaybackTask<int> Fib(int n)
 {
-    await playback.Checkpoint($"{name}:fib({n}):enter");
-
     if (n <= 1)
     {
         return n;
     }
 
-    var left = await Fib(playback, name, n - 1);
-    await playback.Checkpoint($"{name}:fib({n}):middle={left}");
-    var right = await Fib(playback, name, n - 2);
+    var left = await Fib(n - 1);
+    await Checkpoint($"fib({n}):middle={left}");
+    var right = await Fib(n - 2);
     var value = left + right;
-    await playback.Checkpoint($"{name}:fib({n}):exit={value}");
+    await Checkpoint($"fib({n}):end={value}");
     return value;
 }
 
@@ -77,6 +74,6 @@ static void Dump(Playback playback)
 {
     foreach (var record in playback.Records)
         Console.WriteLine(
-            $"{record.Index}: {record.Role} {record.Label} depth={record.Depth} parent={record.ParentIndex}"
+            $"{record.Index}:\t{new string(' ', record.Depth)}{record.Role} {record.Label} depth={record.Depth} parent={record.ParentIndex}"
         );
 }

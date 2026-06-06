@@ -18,6 +18,7 @@ internal sealed class PlaybackRunner<TStateMachine> : IPlaybackRunner
     where TStateMachine : IAsyncStateMachine
 {
     private readonly Playback playback;
+    private readonly PlaybackPromise promise;
     private readonly IPlaybackRunner? parent;
     private IPlaybackRunner[] children = [];
     private int childCount;
@@ -26,9 +27,10 @@ internal sealed class PlaybackRunner<TStateMachine> : IPlaybackRunner
     private TStateMachine current = default!;
     private int nextCheckpointId;
 
-    public PlaybackRunner(Playback playback, IPlaybackRunner? parent)
+    public PlaybackRunner(Playback playback, PlaybackPromise promise, IPlaybackRunner? parent)
     {
         this.playback = playback;
+        this.promise = promise;
         this.parent = parent;
         Depth = parent == null ? 0 : parent.Depth + 1;
         CallRecordIndex = parent == null ? null : playback.AddCall(parent, "Call");
@@ -59,12 +61,14 @@ internal sealed class PlaybackRunner<TStateMachine> : IPlaybackRunner
 
     public void RestoreInitial()
     {
+        promise.ResetForReplay();
         current = SnapshotStateMachine(initial);
         CurrentRecordIndex = null;
     }
 
     public void RestoreCheckpoint(int checkpointId, int recordIndex)
     {
+        promise.ResetForReplay();
         current = SnapshotStateMachine(checkpoints[checkpointId]);
         CurrentRecordIndex = recordIndex;
     }

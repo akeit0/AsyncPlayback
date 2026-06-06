@@ -118,7 +118,7 @@ internal sealed class PlaybackTaskMethodBuilderCore
         where TStateMachine : IAsyncStateMachine
     {
         var parent = PlaybackRuntime.CurrentRunner;
-        var typedRunner = new PlaybackRunner<TStateMachine>(playback, parent);
+        var typedRunner = new PlaybackRunner<TStateMachine>(playback, Promise, parent);
         runner = typedRunner;
         Promise.AttachRunner(runner);
         if (parent == null)

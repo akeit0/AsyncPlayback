@@ -42,6 +42,12 @@ public class PlaybackPromise
         Complete();
     }
 
+    internal void ResetForReplay()
+    {
+        completed = false;
+        exception = null;
+    }
+
     internal void GetResult()
     {
         if (!completed)
@@ -61,9 +67,7 @@ public class PlaybackPromise
 
     protected void Complete()
     {
-        var callback = continuation;
-        continuation = null;
-        callback?.Invoke();
+        continuation?.Invoke();
     }
 }
 
