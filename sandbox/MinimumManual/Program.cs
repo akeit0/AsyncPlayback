@@ -2,6 +2,7 @@
 using static MinimumPlayback.PlaybackTask;
 
 var playback = Playback.Create(_ => Scenario(6));
+
 while (true)
 {
     var keyInfo = Console.ReadKey(true);
@@ -9,11 +10,9 @@ while (true)
     {
         case ConsoleKey.RightArrow:
             var movedNext = playback.TryMoveNext();
-            DumpWithCursor(playback);
             break;
         case ConsoleKey.LeftArrow:
             var movedBack = playback.TryMoveBack();
-            DumpWithCursor(playback);
             break;
         case ConsoleKey.D:
             DumpWithCursor(playback);
@@ -35,20 +34,19 @@ static async PlaybackTask<int> Fib(int n)
 {
     if (n <= 1)
     {
+        Console.WriteLine($"Computed fib({n}) = {n}" + (IsForward ? " forward" : " backward"));
         return n;
     }
 
-    var left = await Fib(n - 1);
-    await Checkpoint($"fib({n}):middle={left}");
-    var right = await Fib(n - 2);
-    var value = left + right;
-    await Checkpoint($"fib({n}):end={value}");
+    var value = await Fib(n - 1) + await Fib(n - 2);
+    Console.WriteLine($"Computed fib({n}) = {value}" + (IsForward ? " forward" : " backward"));
+
     return value;
 }
 static void DumpRecord(PlaybackRecord record)
 {
     Console.WriteLine(
-        $"{record.Index}:\t{string.Concat(Enumerable.Repeat("| ", record.Depth))}{record.Role} {record.Label} depth={record.Depth} parent={record.ParentIndex}"
+        $"{record.Index}:\t{string.Concat(Enumerable.Repeat("| ", record.Depth))}{record.Label} depth={record.Depth} parent={record.ParentIndex}"
     );
 }
 

@@ -11,7 +11,9 @@ internal interface IPlaybackRunner
     void MoveNext();
     void RestoreInitial();
     void RestoreCheckpoint(int checkpointId, int recordIndex);
+    void ResetForReplay();
     void ResumeContinuation(int continuationId);
+    void CompleteAwait(int continuationId, int callRecordIndex);
     void MarkCompleted();
 }
 
@@ -36,7 +38,7 @@ internal sealed class PlaybackRunner<TStateMachine> : IPlaybackRunner
         this.promise = promise;
         this.parent = parent;
         Depth = parent == null ? 0 : parent.Depth + 1;
-        CallRecordIndex = parent == null ? null : playback.AddCall(parent, "Call");
+        CallRecordIndex = parent == null ? null : playback.AddCall(parent, "In");
         parent?.AddChild(this);
     }
 
@@ -64,16 +66,21 @@ internal sealed class PlaybackRunner<TStateMachine> : IPlaybackRunner
 
     public void RestoreInitial()
     {
-        promise.ResetForReplay();
+        ResetForReplay();
         current = SnapshotStateMachine(initial);
         CurrentRecordIndex = null;
     }
 
     public void RestoreCheckpoint(int checkpointId, int recordIndex)
     {
-        promise.ResetForReplay();
+        ResetForReplay();
         current = SnapshotStateMachine(checkpoints[checkpointId]);
         CurrentRecordIndex = recordIndex;
+    }
+
+    public void ResetForReplay()
+    {
+        promise.ResetForReplay();
     }
 
     public int CaptureCheckpoint(ref TStateMachine stateMachine, string label)
@@ -101,6 +108,11 @@ internal sealed class PlaybackRunner<TStateMachine> : IPlaybackRunner
     {
         current = SnapshotStateMachine(continuations[continuationId]);
         MoveNext();
+    }
+
+    public void CompleteAwait(int continuationId, int callRecordIndex)
+    {
+        playback.AddCallEnd(this, continuationId, callRecordIndex);
     }
 
     public void CaptureReplaySuspension(ref TStateMachine stateMachine, int ownerRecordIndex)

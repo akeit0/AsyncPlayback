@@ -16,7 +16,7 @@ public class PlaybackPromise
     {
         if (completed)
         {
-            runner.ResumeContinuation(id);
+            runner.CompleteAwait(id, Runner?.CallRecordIndex ?? -1);
             return;
         }
 
@@ -69,7 +69,7 @@ public class PlaybackPromise
 
     protected void Complete()
     {
-        continuationRunner?.ResumeContinuation(continuationId);
+        continuationRunner?.CompleteAwait(continuationId, Runner?.CallRecordIndex ?? -1);
     }
 }
 

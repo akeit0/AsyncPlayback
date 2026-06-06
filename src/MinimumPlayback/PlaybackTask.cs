@@ -46,7 +46,7 @@ public readonly partial struct PlaybackTask
             this.replayOwnerRecordIndex = replayOwnerRecordIndex;
         }
 
-        public bool IsCompleted => !replaySuspended && promise!.IsCompleted;
+        public bool IsCompleted => false; //!replaySuspended && promise!.IsCompleted;
         PlaybackPromise? IPlaybackAwaiter.Promise => promise;
         bool IPlaybackAwaiter.IsReplaySuspension => replaySuspended;
         int IPlaybackAwaiter.ReplayOwnerRecordIndex => replayOwnerRecordIndex;
@@ -127,7 +127,7 @@ public readonly struct PlaybackTask<T>
             this.replayOwnerRecordIndex = replayOwnerRecordIndex;
         }
 
-        public bool IsCompleted => !replaySuspended && promise!.IsCompleted;
+        public bool IsCompleted => false; // !replaySuspended && promise!.IsCompleted && !promise.ShouldForceContinuation;
         PlaybackPromise? IPlaybackAwaiter.Promise => promise;
         bool IPlaybackAwaiter.IsReplaySuspension => replaySuspended;
         int IPlaybackAwaiter.ReplayOwnerRecordIndex => replayOwnerRecordIndex;

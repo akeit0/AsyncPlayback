@@ -86,6 +86,50 @@ public sealed class MinimumPlaybackTests
         await Assert.That(Joined(events)).IsEqualTo("A0,B0,A1,B1");
     }
 
+    [Test]
+    public async Task StopOnCallEnd_StopsBeforeParentContinuation()
+    {
+        var events = new List<string>();
+        var playback = Playback.Create(
+            _ => CallEndScenario(events),
+            new PlaybackOptions(StopOnCallEnd: true)
+        );
+
+        await Assert.That(playback.TryMoveNext()).IsTrue();
+        await Assert.That(playback.Current?.Label).IsEqualTo("start");
+        await Assert.That(Joined(events)).IsEqualTo("start");
+
+        await Assert.That(playback.TryMoveNext()).IsTrue();
+        await Assert.That(playback.Current?.Label).IsEqualTo("child");
+        await Assert.That(Joined(events)).IsEqualTo("start,child");
+
+        await Assert.That(playback.TryMoveNext()).IsTrue();
+        await Assert.That(playback.Current?.Role).IsEqualTo(PlaybackRecordRole.CallEnd);
+        await Assert.That(Joined(events)).IsEqualTo("start,child");
+
+        await Assert.That(playback.TryMoveNext()).IsTrue();
+        await Assert.That(playback.Current?.Label).IsEqualTo("end=7");
+        await Assert.That(Joined(events)).IsEqualTo("start,child,parent:7");
+    }
+
+    [Test]
+    public async Task StopOnCallEnd_CanMoveBackFromNestedCallEnd()
+    {
+        var playback = Playback.Create(
+            _ => StartingFibScenario(6),
+            new PlaybackOptions(StopOnCallEnd: true)
+        );
+
+        while (playback.TryMoveNext())
+        {
+            if (playback.Cursor == 31)
+                break;
+        }
+
+        await Assert.That(playback.Current?.Role).IsEqualTo(PlaybackRecordRole.CallEnd);
+        await Assert.That(playback.TryMoveBack()).IsTrue();
+    }
+
     private static async PlaybackTask Scenario(int n)
     {
         await Checkpoint("start");
@@ -106,12 +150,46 @@ public sealed class MinimumPlaybackTests
         return value;
     }
 
+    private static async PlaybackTask StartingFibScenario(int n)
+    {
+        await Checkpoint("start");
+        var value = await StartingFib(n);
+        await Checkpoint($"end={value}");
+    }
+
+    private static async PlaybackTask<int> StartingFib(int n)
+    {
+        await Checkpoint($"Starting fib({n})");
+        if (n <= 1)
+            return n;
+
+        var left = await StartingFib(n - 1);
+        var right = await StartingFib(n - 2);
+        return left + right;
+    }
+
     private static async PlaybackTask LinearScenario(string name, List<string> events)
     {
         events.Add($"{name}0");
         await Checkpoint($"{name}:0");
         events.Add($"{name}1");
         await Checkpoint($"{name}:1");
+    }
+
+    private static async PlaybackTask CallEndScenario(List<string> events)
+    {
+        events.Add("start");
+        await Checkpoint("start");
+        var value = await Child(events);
+        events.Add($"parent:{value}");
+        await Checkpoint($"end={value}");
+    }
+
+    private static async PlaybackTask<int> Child(List<string> events)
+    {
+        events.Add("child");
+        await Checkpoint("child");
+        return 7;
     }
 
     private static string Joined(List<string> events) => string.Join(",", events);

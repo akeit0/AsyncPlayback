@@ -5,6 +5,7 @@ public sealed class Playback
     private PlaybackRecord[] records = [];
     private IPlaybackRunner?[] recordRunners = [];
     private int[] checkpointIdsByRecord = [];
+    private int[] continuationIdsByRecord = [];
     private int recordCount;
     private IPlaybackRunner? rootRunner;
     private Func<Playback, PlaybackTask>? entry;
@@ -41,11 +42,11 @@ public sealed class Playback
         if (mode == PlaybackMode.Rewriting)
             return RewriteNext();
 
-        var next = FindNextCheckpoint(cursor);
+        var next = FindNextStop(cursor);
         if (next < 0 && !TryRecordNext())
             return false;
 
-        next = FindNextCheckpoint(cursor);
+        next = FindNextStop(cursor);
         if (next < 0)
             return false;
 
@@ -62,7 +63,7 @@ public sealed class Playback
             return false;
         IsForward = false;
         var target = cursor;
-        var previous = FindPreviousCheckpoint(cursor);
+        var previous = FindPreviousStop(cursor);
         IsCompleted = false;
         ReplayExisting(previous, target);
         mode = PlaybackMode.Rewriting;
@@ -112,6 +113,24 @@ public sealed class Playback
         ).Index;
     }
 
+    internal int AddCallEnd(IPlaybackRunner runner, int continuationId, int callRecordIndex)
+    {
+        const string label = "Out";
+
+        if (TryConsumeReplayRecord(PlaybackRecordRole.CallEnd, label, out var replayRecord))
+        {
+            recordRunners[replayRecord.Index] = runner;
+            continuationIdsByRecord[replayRecord.Index] = continuationId + 1;
+            return replayRecord.Index;
+        }
+
+        TruncateIfRewriting();
+        var record = AddRecord(PlaybackRecordRole.CallEnd, label, runner.Depth, callRecordIndex);
+        recordRunners[record.Index] = runner;
+        continuationIdsByRecord[record.Index] = continuationId + 1;
+        return record.Index;
+    }
+
     internal void OnRootCompleted()
     {
         IsCompleted = true;
@@ -142,18 +161,9 @@ public sealed class Playback
         replayConsumeIndex = startIndex + 1;
         replayStopIndex = stopIndex;
 
-        IPlaybackRunner runner;
-        if (startIndex < 0)
-        {
-            runner = rootRunner!;
-            rootRunner!.RestoreInitial();
-        }
-        else
-        {
-            runner = Restore(records[startIndex]);
-        }
+        var runner = PrepareRunner(startIndex);
 
-        runner.MoveNext();
+        MoveRunnerFrom(startIndex, runner);
 
         if (mode == PlaybackMode.Replaying)
             throw new InvalidOperationException("Replay did not reach the expected checkpoint.");
@@ -163,20 +173,11 @@ public sealed class Playback
     {
         TruncateIfRewriting();
 
-        IPlaybackRunner runner;
-        if (cursor < 0)
-        {
-            runner = rootRunner!;
-            rootRunner!.RestoreInitial();
-        }
-        else
-        {
-            runner = Restore(records[cursor]);
-        }
+        var runner = PrepareRunner(cursor);
 
-        runner.MoveNext();
+        MoveRunnerFrom(cursor, runner);
 
-        var next = FindNextCheckpoint(cursor);
+        var next = FindNextStop(cursor);
         if (next < 0)
             return false;
 
@@ -190,22 +191,33 @@ public sealed class Playback
         if (IsCompleted)
             return false;
 
-        IPlaybackRunner runner;
-        if (cursor < 0)
-        {
-            runner = rootRunner!;
-            rootRunner!.RestoreInitial();
-        }
-        else
-        {
-            runner = Restore(records[cursor]);
-        }
+        var runner = PrepareRunner(cursor);
 
-        runner.MoveNext();
+        MoveRunnerFrom(cursor, runner);
         return true;
     }
 
-    private IPlaybackRunner Restore(PlaybackRecord record)
+    private IPlaybackRunner PrepareRunner(int recordIndex)
+    {
+        if (recordIndex < 0)
+        {
+            var runner = rootRunner!;
+            rootRunner!.RestoreInitial();
+            return runner;
+        }
+
+        var record = records[recordIndex];
+        if (record.Role == PlaybackRecordRole.CallEnd)
+        {
+            var runner = GetRunner(record);
+            runner.ResetForReplay();
+            return runner;
+        }
+
+        return RestoreCheckpoint(record);
+    }
+
+    private IPlaybackRunner RestoreCheckpoint(PlaybackRecord record)
     {
         var runner = GetRunner(record);
         var checkpointKey = checkpointIdsByRecord[record.Index];
@@ -214,6 +226,21 @@ public sealed class Playback
 
         runner.RestoreCheckpoint(checkpointKey - 1, record.Index);
         return runner;
+    }
+
+    private void MoveRunnerFrom(int recordIndex, IPlaybackRunner runner)
+    {
+        if (recordIndex >= 0 && records[recordIndex].Role == PlaybackRecordRole.CallEnd)
+        {
+            var continuationKey = continuationIdsByRecord[recordIndex];
+            if (continuationKey == 0)
+                throw new InvalidOperationException("Call end continuation was not found.");
+
+            runner.ResumeContinuation(continuationKey - 1);
+            return;
+        }
+
+        runner.MoveNext();
     }
 
     private IPlaybackRunner GetRunner(PlaybackRecord record)
@@ -280,28 +307,34 @@ public sealed class Playback
             Array.Clear(records, index, recordCount - index);
             Array.Clear(recordRunners, index, recordCount - index);
             Array.Clear(checkpointIdsByRecord, index, recordCount - index);
+            Array.Clear(continuationIdsByRecord, index, recordCount - index);
             recordCount = index;
         }
         rewriteFrom = -1;
         mode = PlaybackMode.Normal;
     }
 
-    private int FindNextCheckpoint(int afterIndex)
+    private int FindNextStop(int afterIndex)
     {
         for (var i = afterIndex + 1; i < recordCount; i++)
-            if (records[i].Role == PlaybackRecordRole.Checkpoint)
+            if (IsStop(records[i]))
                 return i;
 
         return -1;
     }
 
-    private int FindPreviousCheckpoint(int beforeIndex)
+    private int FindPreviousStop(int beforeIndex)
     {
         for (var i = beforeIndex - 1; i >= 0; i--)
-            if (records[i].Role == PlaybackRecordRole.Checkpoint)
+            if (IsStop(records[i]))
                 return i;
 
         return -1;
+    }
+
+    private bool IsStop(PlaybackRecord record)
+    {
+        return record.Role is PlaybackRecordRole.Checkpoint or PlaybackRecordRole.CallEnd;
     }
 
     private void EnsureRecordCapacity()
@@ -313,6 +346,7 @@ public sealed class Playback
         Array.Resize(ref records, capacity);
         Array.Resize(ref recordRunners, capacity);
         Array.Resize(ref checkpointIdsByRecord, capacity);
+        Array.Resize(ref continuationIdsByRecord, capacity);
     }
 
     private enum PlaybackMode

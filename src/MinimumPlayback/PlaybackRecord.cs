@@ -4,6 +4,7 @@ public enum PlaybackRecordRole
 {
     Checkpoint,
     Call,
+    CallEnd,
 }
 
 public readonly record struct PlaybackRecord(
