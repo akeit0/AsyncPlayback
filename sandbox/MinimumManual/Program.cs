@@ -46,7 +46,7 @@ static async PlaybackTask<int> Fib(int n)
 static void DumpRecord(PlaybackRecord record)
 {
     Console.WriteLine(
-        $"{record.Index}:\t{string.Concat(Enumerable.Repeat("| ", record.Depth))}{record.Label} depth={record.Depth} parent={record.ParentIndex}"
+        $"{record.Index, 3}: {string.Concat(Enumerable.Repeat("| ", record.Depth))}{record.Label} depth={record.Depth} parent={record.ParentIndex}"
     );
 }
 
