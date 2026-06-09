@@ -2,7 +2,7 @@
 
 This document explains how `src/MinimumPlayback` works internally. 
 The goal is to describe the algorithm: how C# async state machines
-are captured, recorded as timeline boundaries, moved forward, and replayed to
+are captured, recorded as movement boundaries, moved forward, and replayed to
 move backward.
 
 `MinimumPlayback` is deliberately small. It has checkpoints, nested
@@ -10,7 +10,7 @@ move backward.
 root completion, and backward movement. It has no virtual time, scheduler,
 `ValueTask`, general `Task` semantics, or user data store.
 
-## 1. Observable Behavior
+## 1. Example
 
 Consider this program:
 
@@ -70,16 +70,6 @@ done
 done
 ```
 
-Backward movement is not C# running in reverse. A backward step restores an
-earlier state-machine snapshot, runs the generated `MoveNext()` forward until
-the current timeline boundary is reproduced, consumes that boundary, and then
-moves the cursor backward.
-
-| Movement | What happens |
-| --- | --- |
-| Forward | Restore the current boundary, run `MoveNext()`, then land on the next boundary. |
-| Backward | Restore the previous boundary, run `MoveNext()` forward to reproduce the current boundary, then consume the current boundary. |
-
 ## 2. Core Model
 
 C# lowers an `async` method into an `IAsyncStateMachine`. That generated state
@@ -87,158 +77,7 @@ machine owns the resume state, locals, awaiter fields, and a `MoveNext()` method
 
 `MinimumPlayback` uses the generated state machine as executable state. It does
 not interpret user code. It stores snapshots of the state machine at known
-movement boundaries.
-
-The main runtime objects are:
-
-| Object | Owns |
-| --- | --- |
-| `Playback` | Timeline records, record-to-runner map, record-to-stop-id map, movement cursor, replay/rewrite mode. |
-| `PlaybackRunner<TStateMachine>` | Initial state-machine snapshot, current executable snapshot, and `stops[]` snapshots captured at checkpoints and parent await sites. |
-| `PlaybackPromise` | Child completion state, parent continuation runner, and parent continuation stop id. |
-
-The timeline is not executable state. It is an index over visible movement
-boundaries:
-
-| Lookup | Meaning |
-| --- | --- |
-| `record index -> PlaybackRecord` | Metadata for the visible timeline record. |
-| `record index -> runner` | Runner for runner-backed boundaries such as `Call`, `Checkpoint`, and `CallEnd`. |
-| `record index -> stop id` | Runner-local snapshot id for snapshot-backed boundaries such as `Checkpoint` and `CallEnd`. |
-
-```mermaid
-flowchart LR
-    RecordIndex["record index"]
-    Record["records[index]<br/>role, label, depth, parent"]
-    RunnerMap["recordRunners[index]<br/>runner-backed boundaries"]
-    StopMap["stopIdsByRecord[index]<br/>snapshot-backed boundaries"]
-    RunnerInitial["runner.initial<br/>Call"]
-    RunnerStop["runner.stops[stopId]<br/>Checkpoint / CallEnd"]
-
-    RecordIndex --> Record
-    RecordIndex --> RunnerMap
-    RecordIndex --> StopMap
-    RunnerMap --> RunnerInitial
-    RunnerMap --> RunnerStop
-    StopMap --> RunnerStop
-```
-
-`Call` is runner-backed but not stop-id-backed: it starts the child runner from
-that runner's `initial` snapshot. `Checkpoint` and `CallEnd` are backed by a
-runner plus a runner-local stop id. `Completed` is a boundary with no runner
-state.
-
-## 3. Nested Call and the Call Boundary
-
-`Call` is easiest to understand from a nested example:
-
-```csharp
-var playback = Playback.Create(_ => Nest(3, 3));
-
-static async PlaybackTask Nest(int m, int n)
-{
-    Console.WriteLine($"Entering nest({n})" + (IsForward ? " forward" : " backward"));
-
-    if (n <= 0)
-        return;
-
-    for (var i = n; i < m; i++)
-    {
-        await Checkpoint();
-        Console.WriteLine($"In nest({n}) loop {i}" + (IsForward ? " forward" : " backward"));
-    }
-
-    await Nest(m, n - 1);
-
-    Console.WriteLine($"Exiting nest({n})" + (IsForward ? " forward" : " backward"));
-}
-```
-
-Forward output:
-
-```text
-Entering nest(3) forward
-Entering nest(2) forward
-In nest(2) loop 2 forward
-Entering nest(1) forward
-In nest(1) loop 1 forward
-In nest(1) loop 2 forward
-Entering nest(0) forward
-Exiting nest(1) forward
-Exiting nest(2) forward
-Exiting nest(3) forward
-```
-
-Backward output from completion:
-
-```text
-Exiting nest(3) backward
-Exiting nest(2) backward
-Exiting nest(1) backward
-Entering nest(0) backward
-In nest(1) loop 2 backward
-In nest(1) loop 1 backward
-Entering nest(1) backward
-In nest(2) loop 2 backward
-Entering nest(2) backward
-Entering nest(3) backward
-```
-
-This dump helper prints the resulting timeline:
-
-```csharp
-static void DumpRecord(PlaybackRecord record)
-{
-    Console.WriteLine(
-        $"{record.Index, 3}: {string.Concat(Enumerable.Repeat("| ", record.Depth))}{record.Label} depth={record.Depth} parent={record.ParentIndex}"
-    );
-}
-
-static void Dump(Playback playback)
-{
-    for (var i = 0; i < playback.Records.Length; i++)
-    {
-        DumpRecord(playback.Records[i]);
-    }
-}
-```
-
-Timeline:
-
-```text
-  0: In depth=0 parent=-1
-  1: | Checkpoint depth=1 parent=0
-  2: | In depth=1 parent=0
-  3: | | Checkpoint depth=2 parent=2
-  4: | | Checkpoint depth=2 parent=2
-  5: | | In depth=2 parent=2
-  6: | | Out depth=2 parent=5
-  7: | Out depth=1 parent=2
-  8: Out depth=0 parent=0
-  9: Completed depth=0 parent=-1
-```
-
-The `Call` record lets movement stop before a child state machine starts. Moving
-forward from `Call` restores the child runner's `initial` state and calls
-`MoveNext()`. The `CallEnd` record lets movement stop after the child has
-completed but before the parent await continuation resumes.
-
-```mermaid
-flowchart TD
-    Parent["Parent runner"]
-    Await["await child"]
-    ParentStop["capture parent await stop"]
-    Call["Call stop<br/>child not started"]
-    Child["child initial -> MoveNext"]
-    ChildStops["child checkpoints / nested calls"]
-    CallEnd["CallEnd stop<br/>child completed"]
-    ParentResume["resume parent await stop"]
-
-    Parent --> Await --> ParentStop --> Call
-    Call --> Child --> ChildStops --> CallEnd --> ParentResume
-```
-
-## 4. Generated State Machine Example
+movement boundaries and records those boundaries in the timeline.
 
 The sample `ForScenario` is lowered into one generated state machine. Exact
 names differ by compiler, but the shape is what matters:
@@ -321,6 +160,18 @@ The fields that matter in this example are:
 | `checkpointAwaiter` | Awaiter contract for the suspended operation. `GetResult()` is the resume point after `await`: it propagates exceptions and returns the awaited value. `Checkpoint()` returns void, but typed child awaits use the same pattern to return `T`. |
 | `builder` | Custom builder that lets `MinimumPlayback` capture and resume execution. |
 
+Playback does not record console output. It records the places where execution
+can stop. For the example above, those stops are:
+
+| Stop | Why it exists |
+| --- | --- |
+| `i == 0` checkpoint | `await Checkpoint()` suspended the generated state machine. |
+| `i == 1` checkpoint | The next loop iteration reached the same checkpoint await. |
+| `i == 2` checkpoint | The last loop iteration reached the same checkpoint await. |
+| `Completed` | The root async method finished. |
+
+This ordered list of stop records is called the timeline in this document.
+
 For this example, the meaningful state is mostly `(state, i)`:
 
 | Boundary | `state` | `i` |
@@ -352,7 +203,136 @@ flowchart TD
     C -. "back: replay stop2 -> Completed<br/>cursor becomes stop2" .-> S2
 ```
 
-## 5. Builder and Runner Lifecycle
+Timeline vocabulary:
+
+| Term | Meaning |
+| --- | --- |
+| Timeline | Ordered `PlaybackRecord[]` built by executing user code. |
+| Record | One movement boundary in that ordered array. |
+| Boundary | A place where `TryMoveNext()` or `TryMoveBack()` can stop. |
+| Cursor | Current record index in the timeline, or `-1` before the first record. |
+| Future | Records after the cursor; they may be truncated after moving backward. |
+
+The main runtime objects are:
+
+| Object | Owns |
+| --- | --- |
+| `Playback` | Timeline records, record-to-runner map, record-to-stop-id map, movement cursor, replay/rewrite mode. |
+| `PlaybackRunner<TStateMachine>` | Initial state-machine snapshot, current executable snapshot, and `stops[]` snapshots captured at checkpoints and parent await sites. |
+| `PlaybackPromise` | Child completion state, parent continuation runner, and parent continuation stop id. |
+
+During movement, the cursor is just a record index. Playback uses that index to
+find the state-machine snapshot needed to run the next forward segment:
+
+| Current record role | Restore source |
+| --- | --- |
+| Before first record (`-1`) | Root runner initial snapshot. |
+| `Checkpoint` | Owning runner and `runner.stops[stopId]`. |
+| `Call` | Child runner initial snapshot. |
+| `CallEnd` | Parent runner and `runner.stops[stopId]`. |
+| `Completed` | No restore source; the root method already ended. |
+
+The record itself carries visible metadata such as role, label, depth, and
+parent index. The runner and stop id are stored beside it because they are
+runtime pointers for restore/replay, not display data.
+
+## 3. Nested Call and the Call Boundary
+
+`Call` is easiest to understand from a nested example:
+
+```csharp
+var playback = Playback.Create(_ => Nest(3, 3));
+
+static async PlaybackTask Nest(int m, int n)
+{
+    Console.WriteLine($"[{m - n}]Entering nest({n})" + (IsForward ? " ↓" : " ↑"));
+    if (n <= 0)
+    {
+        return;
+    }
+
+    await Nest(m, n - 1);
+
+    Console.WriteLine($"[{m + n}]Exiting nest({n})" + (IsForward ? " ↓" : " ↑"));
+}
+```
+
+Forward output:
+
+```text
+[0]Entering nest(3) ↓
+[1]Entering nest(2) ↓
+[2]Entering nest(1) ↓
+[3]Entering nest(0) ↓
+[4]Exiting nest(1) ↓
+[5]Exiting nest(2) ↓
+[6]Exiting nest(3) ↓
+```
+
+Backward output from completion:
+
+```text
+[6]Exiting nest(3) ↑
+[5]Exiting nest(2) ↑
+[4]Exiting nest(1) ↑
+[3]Entering nest(0) ↑
+[2]Entering nest(1) ↑
+[1]Entering nest(2) ↑
+[0]Entering nest(3) ↑
+```
+
+This dump helper prints the resulting timeline:
+
+```csharp
+static void DumpRecord(PlaybackRecord record)
+{
+    Console.WriteLine(
+        $"{record.Index, 3}: {string.Concat(Enumerable.Repeat("| ", record.Depth))}{record.Label} depth={record.Depth} parent={record.ParentIndex}"
+    );
+}
+
+static void Dump(Playback playback)
+{
+    for (var i = 0; i < playback.Records.Length; i++)
+    {
+        DumpRecord(playback.Records[i]);
+    }
+}
+```
+
+Timeline:
+
+```text
+  0: In depth=0 parent=-1
+  1: | In depth=1 parent=0
+  2: | | In depth=2 parent=1
+  3: | | Out depth=2 parent=2
+  4: | Out depth=1 parent=1
+  5: Out depth=0 parent=0
+  6: Completed depth=0 parent=-1
+```
+
+The `Call` record lets movement stop before a child state machine starts. Moving
+forward from `Call` restores the child runner's `initial` state and calls
+`MoveNext()`. The `CallEnd` record lets movement stop after the child has
+completed but before the parent await continuation resumes.
+
+```mermaid
+flowchart TD
+    Parent["Parent runner"]
+    Await["await child"]
+    ParentStop["capture parent await stop"]
+    Call["Call stop<br/>child not started"]
+    Child["child initial -> MoveNext"]
+    ChildStops["child checkpoints / nested calls"]
+    CallEnd["CallEnd stop<br/>child completed"]
+    ParentResume["resume parent await stop"]
+
+    Parent --> Await --> ParentStop --> Call
+    Call --> Child --> ChildStops --> CallEnd --> ParentResume
+```
+
+## 4. Compiler Callbacks to Playback Runtime
 
 `PlaybackTask` and `PlaybackTask<T>` use custom async method builders:
 
@@ -368,9 +348,20 @@ The compiler-generated state machine calls the custom builder instead of
 `AsyncTaskMethodBuilder`. The real dispatch lives in
 `PlaybackTaskMethodBuilderCore`.
 
-### Start
+The important part is not the builder API itself. The important part is where
+the generated state machine calls back into the runtime:
 
-`Start(ref stateMachine)` creates the runner for the async method being lowered.
+| Generated state-machine event | Builder/runtime path | Playback effect |
+| --- | --- | --- |
+| Async method starts. | Builder `Start(ref stateMachine)`. | Create a runner and store the initial state-machine snapshot. |
+| `await` cannot complete synchronously. | `AwaitUnsafeOnCompleted(...)` -> `CaptureAwait(...)`. | Store a stop snapshot and usually record a timeline boundary. |
+| Method returns normally. | `SetResult(...)` -> runner completion. | Record `Completed` for root, or `CallEnd` for child. |
+| Method throws. | `SetException(...)` -> runner completion with exception. | Same timeline path as completion; exception is stored in the promise. |
+
+### Async Method Start
+
+When a generated async method starts, the builder creates the runner that owns
+that method's state-machine snapshots.
 
 | Step | Operation | Purpose |
 | ---: | --- | --- |
@@ -386,9 +377,15 @@ Root and nested methods then diverge:
 | Root method | Attach as root runner and call `MoveNext()` immediately. | The first `TryMoveNext()` runs user code until the first boundary. |
 | Nested `PlaybackTask` | Record `Call` with the child runner. | Movement stops before the child starts; the child runs only when playback advances from `Call`. |
 
-### CaptureAwait
+### Await Suspension
 
-`CaptureAwait(ref awaiter, ref stateMachine)` handles incomplete awaits:
+When generated `MoveNext()` reaches an incomplete await, it calls:
+
+```csharp
+builder.AwaitUnsafeOnCompleted(ref awaiter, ref this);
+```
+
+`MinimumPlayback` uses that callback as the capture point for replayable state:
 
 | Awaiter case | Captured state | Timeline effect |
 | --- | --- | --- |
@@ -399,21 +396,19 @@ Root and nested methods then diverge:
 Checkpoint capture creates a visible stop for user movement. Child-await capture
 creates the parent continuation stop that will later be used by `CallEnd`.
 
-### Complete
+### Method Completion
 
-`Complete()` and `Complete<T>(...)` mark the runner as completed and complete its
-promise.
+When generated `MoveNext()` finishes, it calls `builder.SetResult()`. If user
+code throws, the catch block calls `builder.SetException(exception)`.
 
-For the root runner, `MarkCompleted()` records `Completed`. For a child runner,
-promise completion records `CallEnd` through the registered parent continuation:
+Both paths complete the runner's promise. For the root runner, completion
+records `Completed`. For a child runner, promise completion records `CallEnd`
+through the registered parent continuation:
 
 | Runner | Completion path | Timeline effect |
 | --- | --- | --- |
 | Root | `MarkCompleted()`. | Record or consume `Completed`. |
 | Child | Complete promise, then resume registered parent continuation through `CompleteAwait(...)`. | Record or consume `CallEnd`. |
-
-`SetException(...)` follows the same completion path but stores the exception in
-the promise.
 
 `PlaybackRuntime` provides the ambient synchronous scope:
 
@@ -425,9 +420,18 @@ the promise.
 When a runner calls `MoveNext()`, it pushes itself as `CurrentRunner`. This is
 how a nested async method discovers its parent runner.
 
-## 6. Timeline Records and Stop Storage
+## 5. Timeline Records and Stop Storage
 
-Timeline records are small value records:
+Timeline records are produced by the callback flow above:
+
+| Record role | Produced from | Why it is a stop |
+| --- | --- | --- |
+| `Checkpoint` | `AwaitUnsafeOnCompleted(...)` for `await Checkpoint()`. | User explicitly requested a movement boundary. |
+| `Call` | Builder start of a nested `PlaybackTask`. | Playback can stop before the child state machine begins. |
+| `CallEnd` | Child `SetResult(...)` or `SetException(...)`. | Playback can stop after the child completes and before parent continuation resumes. |
+| `Completed` | Root `SetResult(...)` or `SetException(...)`. | Playback can stop at root completion. |
+
+The stored record is small:
 
 ```csharp
 public readonly record struct PlaybackRecord(
@@ -472,7 +476,7 @@ Parent/depth rules:
 | `CallEnd` | Completed child call record. |
 | `Completed` | `-1`. |
 
-## 7. Moving Forward
+## 6. Moving Forward
 
 `Playback.Create(...)` is lazy. It stores the entry delegate but does not run
 user code. The first `TryMoveNext()` starts the root runner and runs until the
@@ -504,7 +508,7 @@ If the previous backward move put playback in `Rewriting` mode, the next forward
 move first truncates records from `rewriteFrom`, fills cleared stop ids with
 `-1`, and then records a new future.
 
-## 8. Moving Back
+## 7. Moving Back
 
 `TryMoveBack()` never executes C# backward. It replays a forward segment while
 `IsForward == false`.
@@ -542,7 +546,7 @@ After a successful backward step, the cursor points to `previous`, but the old
 future still exists in arrays. `Rewriting` mode means the next forward movement
 will truncate that future before recording anything new.
 
-## 9. Typed Results, Exceptions, and Cloning
+## 8. Typed Results, Exceptions, and Cloning
 
 `PlaybackTask<T>` stores its result in `PlaybackPromise<T>`, not in the task
 struct. The task struct is only a handle; the promise is the shared object
@@ -602,7 +606,7 @@ The clone is intentionally shallow. It is enough to copy compiler state-machine
 fields themselves, but it does not deep-copy arbitrary mutable objects referenced
 by locals.
 
-## 10. Constraints and Mental Model
+## 9. Constraints and Mental Model
 
 Constraints:
 
