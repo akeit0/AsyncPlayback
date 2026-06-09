@@ -2,6 +2,8 @@ namespace MinimumPlayback;
 
 public sealed class Playback
 {
+    private const int NoStopId = -1;
+
     private PlaybackRecord[] records = [];
     private IPlaybackRunner?[] recordRunners = [];
     private int[] stopIdsByRecord = [];
@@ -82,7 +84,7 @@ public sealed class Playback
         if (TryConsumeReplayRecord(PlaybackRecordRole.Checkpoint, label, out var replayRecord))
         {
             recordRunners[replayRecord.Index] = runner;
-            stopIdsByRecord[replayRecord.Index] = stopId + 1;
+            stopIdsByRecord[replayRecord.Index] = stopId;
             return replayRecord.Index;
         }
 
@@ -94,7 +96,7 @@ public sealed class Playback
             runner.CallRecordIndex ?? -1
         );
         recordRunners[record.Index] = runner;
-        stopIdsByRecord[record.Index] = stopId + 1;
+        stopIdsByRecord[record.Index] = stopId;
         return record.Index;
     }
 
@@ -103,6 +105,7 @@ public sealed class Playback
         if (TryConsumeReplayRecord(PlaybackRecordRole.Call, label, out var replayRecord))
         {
             recordRunners[replayRecord.Index] = child;
+            stopIdsByRecord[replayRecord.Index] = NoStopId;
             child.SetCallRecordIndex(replayRecord.Index);
             return replayRecord.Index;
         }
@@ -115,6 +118,7 @@ public sealed class Playback
             parent.CallRecordIndex ?? -1
         );
         recordRunners[record.Index] = child;
+        stopIdsByRecord[record.Index] = NoStopId;
         child.SetCallRecordIndex(record.Index);
         return record.Index;
     }
@@ -126,14 +130,14 @@ public sealed class Playback
         if (TryConsumeReplayRecord(PlaybackRecordRole.CallEnd, label, out var replayRecord))
         {
             recordRunners[replayRecord.Index] = runner;
-            stopIdsByRecord[replayRecord.Index] = stopId + 1;
+            stopIdsByRecord[replayRecord.Index] = stopId;
             return replayRecord.Index;
         }
 
         TruncateIfRewriting();
         var record = AddRecord(PlaybackRecordRole.CallEnd, label, runner.Depth, callRecordIndex);
         recordRunners[record.Index] = runner;
-        stopIdsByRecord[record.Index] = stopId + 1;
+        stopIdsByRecord[record.Index] = stopId;
         return record.Index;
     }
 
@@ -243,11 +247,11 @@ public sealed class Playback
     private IPlaybackRunner RestoreStop(PlaybackRecord record)
     {
         var runner = GetRunner(record);
-        var stopKey = stopIdsByRecord[record.Index];
-        if (stopKey == 0)
+        var stopId = stopIdsByRecord[record.Index];
+        if (stopId == NoStopId)
             throw new InvalidOperationException("Record stop was not found.");
 
-        runner.RestoreStop(stopKey - 1, record.Index);
+        runner.RestoreStop(stopId, record.Index);
         return runner;
     }
 
@@ -255,11 +259,11 @@ public sealed class Playback
     {
         if (recordIndex >= 0 && records[recordIndex].Role == PlaybackRecordRole.CallEnd)
         {
-            var stopKey = stopIdsByRecord[recordIndex];
-            if (stopKey == 0)
+            var stopId = stopIdsByRecord[recordIndex];
+            if (stopId == NoStopId)
                 throw new InvalidOperationException("Record stop was not found.");
 
-            runner.ResumeStop(stopKey - 1);
+            runner.ResumeStop(stopId);
             return;
         }
 
@@ -329,7 +333,7 @@ public sealed class Playback
         {
             Array.Clear(records, index, recordCount - index);
             Array.Clear(recordRunners, index, recordCount - index);
-            Array.Clear(stopIdsByRecord, index, recordCount - index);
+            Array.Fill(stopIdsByRecord, NoStopId, index, recordCount - index);
             recordCount = index;
         }
         rewriteFrom = -1;
@@ -368,10 +372,12 @@ public sealed class Playback
         if (recordCount < records.Length)
             return;
 
+        var oldCapacity = records.Length;
         var capacity = records.Length == 0 ? 8 : records.Length * 2;
         Array.Resize(ref records, capacity);
         Array.Resize(ref recordRunners, capacity);
         Array.Resize(ref stopIdsByRecord, capacity);
+        Array.Fill(stopIdsByRecord, NoStopId, oldCapacity, capacity - oldCapacity);
     }
 
     private enum PlaybackMode

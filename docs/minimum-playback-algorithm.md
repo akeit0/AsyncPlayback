@@ -104,8 +104,8 @@ The timeline is an indexed debug and movement log:
 
 ```text
 record index -> record metadata
-record index -> runner, for resumable stops
-record index -> runner-local stop id, for resumable stops
+record index -> runner, for runner-backed boundaries
+record index -> runner-local stop id, for snapshot-backed boundaries
 ```
 
 Movement restores a runner stop, runs `MoveNext()`, and either records new
@@ -115,8 +115,8 @@ records or consumes existing records during replay.
 flowchart LR
     RecordIndex["record index"]
     Record["records[index]<br/>role, label, depth, parent"]
-    RunnerMap["runner = recordRunners[index]<br/>for resumable stops"]
-    StopMap["stopId = stopIdsByRecord[index] - 1<br/>for resumable stops"]
+    RunnerMap["runner = recordRunners[index]<br/>for runner-backed boundaries"]
+    StopMap["stopId = stopIdsByRecord[index]<br/>for snapshot-backed boundaries"]
     RunnerStop["runner.stops[stopId]<br/>state-machine snapshot"]
 
     RecordIndex --> Record
@@ -261,58 +261,81 @@ that existing stop, then leaves the cursor at the previous stop.
 
 ## Nested Call Example
 
-Now consider a nested typed task:
+Now consider a nested task with simple logging:
 
 ```csharp
-static async PlaybackTask Scenario()
+var playback = Playback.Create(_ => Nest(3, 3));
+
+static async PlaybackTask Nest(int m, int n)
 {
-    await Checkpoint("start");
-    var value = await Fib(2);
-    await Checkpoint($"end={value}");
-}
+    Console.WriteLine($"Entering nest({n})" + (IsForward ? " forward" : " backward"));
 
-static async PlaybackTask<int> Fib(int n)
-{
-    await Checkpoint($"fib({n})");
+    if (n <= 0)
+        return;
 
-    if (n <= 1)
-        return n;
+    for (var i = n; i < m; i++)
+    {
+        await Checkpoint();
+        Console.WriteLine($"In nest({n}) loop {i}" + (IsForward ? " forward" : " backward"));
+    }
 
-    var left = await Fib(n - 1);
-    var right = await Fib(n - 2);
-    return left + right;
+    await Nest(m, n - 1);
+
+    Console.WriteLine($"Exiting nest({n})" + (IsForward ? " forward" : " backward"));
 }
 ```
 
-The important point is that `Fib(2)` is not treated as an opaque normal task.
-It becomes a nested playback runner with its own compiler-generated async state
-machine.
+The important point is that each `Nest(...)` call becomes a child runner.  A
+`Call` record is the movement boundary before that child runner starts.
 
-The resulting timeline is shaped like this:
+Forward execution prints:
 
 ```text
-Checkpoint start
-Call In                 // enter Fib(2)
-  Checkpoint fib(2)
-  Call In               // enter Fib(1)
-    Checkpoint fib(1)
-  CallEnd Out           // Fib(1) returned
-  Call In               // enter Fib(0)
-    Checkpoint fib(0)
-  CallEnd Out           // Fib(0) returned
-CallEnd Out             // Fib(2) returned
-Checkpoint end=1
-Completed              // root method returned
+Entering nest(3) forward
+Entering nest(2) forward
+In nest(2) loop 2 forward
+Entering nest(1) forward
+In nest(1) loop 1 forward
+In nest(1) loop 2 forward
+Entering nest(0) forward
+Exiting nest(1) forward
+Exiting nest(2) forward
+Exiting nest(3) forward
 ```
 
-`Checkpoint`, `CallEnd`, and `Completed` are movement stops.  `Call` records
-are structural.  They make the debug hierarchy visible, but movement never
-lands on them.
-
-Forward movement runs from one stop to the next:
+Moving backward from completion replays the same segments with `IsForward ==
+false`:
 
 ```text
-start -> fib(2) -> fib(1) -> CallEnd -> fib(0) -> CallEnd -> CallEnd -> end=1 -> Completed
+Exiting nest(3) backward
+Exiting nest(2) backward
+Exiting nest(1) backward
+Entering nest(0) backward
+In nest(1) loop 2 backward
+In nest(1) loop 1 backward
+Entering nest(1) backward
+In nest(2) loop 2 backward
+Entering nest(2) backward
+Entering nest(3) backward
+```
+
+`Checkpoint`, `Call`, `CallEnd`, and `Completed` are movement stops.  `Call`
+records are child-entry boundaries: movement can land on a call before the child
+state machine starts.
+
+The resulting timeline is:
+
+```text
+  0: In depth=0 parent=-1
+  1: | Checkpoint depth=1 parent=0
+  2: | In depth=1 parent=0
+  3: | | Checkpoint depth=2 parent=2
+  4: | | Checkpoint depth=2 parent=2
+  5: | | In depth=2 parent=2
+  6: | | Out depth=2 parent=5
+  7: | Out depth=1 parent=2
+  8: Out depth=0 parent=0
+  9: Completed depth=0 parent=-1
 ```
 
 ## Async Builder Hook
@@ -377,10 +400,16 @@ private int recordCount;
 private int cursor;
 ```
 
-`records` stores the visible timeline.  `recordRunners` and
-`stopIdsByRecord` map resumable stop records to the runner and runner-local
-stop id that can resume from that record.  Stop ids are stored as `stopId + 1`
-so zero means missing.
+`records` stores the visible timeline.  `recordRunners` maps runner-backed
+boundaries, including `Call`, to a runner.  `stopIdsByRecord` maps
+snapshot-backed boundaries, such as `Checkpoint` and `CallEnd`, to a
+runner-local stop id.  Missing stop ids are stored as `-1`, so stop id `0` can
+be used directly.
+
+The `-1` sentinel is maintained at the small number of array resize and
+truncate points.  This keeps restore and resume code readable: it can use
+`stopIdsByRecord[index]` directly instead of decoding `+1` / `-1` storage
+arithmetic at every access.
 
 `Playback` also owns movement mode:
 
@@ -417,8 +446,8 @@ private int stopCount;
 
 `initial` is the state before first execution.  `current` is the executable
 copy.  `stops` stores snapshots captured at explicit checkpoints and parent
-await sites.  One array is enough because both checkpoint records and call-end
-records are movement boundaries in the minimal model.
+await sites.  Checkpoint and call-end records point into this array.  Call
+records instead restore the child runner's `initial` state.
 
 ### PlaybackPromise
 
@@ -467,22 +496,23 @@ public readonly record struct PlaybackRecord(
 Roles:
 
 ```text
-Checkpoint  explicit user checkpoint; movement stop
-Call        structural call entry; debug hierarchy only
-CallEnd     child completion boundary; movement stop
-Completed   root completion boundary; movement stop
+Checkpoint  explicit user checkpoint; movement stop with runner + stop id
+Call        child entry boundary; movement stop with child runner initial state
+CallEnd     child completion boundary; movement stop with runner + stop id
+Completed   root completion boundary; movement stop without runner state
 ```
 
-`Checkpoint`, `CallEnd`, and `Completed` are stops.  `Call` is structural and
-is not a movement target.  `Completed` has no runner-local stop id because the
-runtime never restores from completion; it only lands on it or replays into it
-while moving back.
+There is no structural-only role in the minimal model now.  `Call` has no
+runner-local stop id because entering a child starts from the child runner's
+initial state.  `Completed` has no runner-local stop id because the runtime
+never restores from completion; it only lands on it or replays into it while
+moving back.
 
 ```mermaid
 flowchart TD
     Timeline["Timeline records"]
     Checkpoint["Checkpoint<br/>movement stop<br/>has runner + stop id"]
-    Call["Call<br/>structural only<br/>no stop id"]
+    Call["Call<br/>movement stop<br/>child runner initial"]
     CallEnd["CallEnd<br/>movement stop<br/>has runner + stop id"]
     Completed["Completed<br/>movement stop<br/>no stop id"]
 
@@ -506,14 +536,23 @@ last movement boundary.
 
 ## Stop Storage
 
-Runner stops are state-machine snapshots.  A timeline stop record points to a
-runner stop id:
+Runner stops are state-machine snapshots.  Checkpoint and call-end records
+point to a runner stop id:
 
 ```text
 record index
   -> records[index]
   -> recordRunners[index]
-  -> stopIdsByRecord[index] - 1
+  -> stopIdsByRecord[index]
+```
+
+Call records point to the child runner but not to a stop id:
+
+```text
+record index
+  -> records[index]
+  -> child runner in recordRunners[index]
+  -> child runner initial state
 ```
 
 For a checkpoint:
@@ -547,7 +586,7 @@ For continuing after a call end:
 ```text
 record is CallEnd
   runner = recordRunners[record.Index]
-  stopId = stopIdsByRecord[record.Index] - 1
+  stopId = stopIdsByRecord[record.Index]
   runner.ResumeStop(stopId)
 ```
 
@@ -556,7 +595,7 @@ For restoring a checkpoint:
 ```text
 record is Checkpoint
   runner = recordRunners[record.Index]
-  stopId = stopIdsByRecord[record.Index] - 1
+  stopId = stopIdsByRecord[record.Index]
   runner.RestoreStop(stopId, record.Index)
 ```
 
@@ -632,13 +671,17 @@ cursor is Checkpoint
   restore runner stop snapshot
   runner.MoveNext()
 
+cursor is Call
+  restore child runner initial state
+  child.MoveNext()
+
 cursor is CallEnd
   reset runner promise for replay
   runner.ResumeStop(stop id)
 ```
 
-When user code records a checkpoint or call-end, it appends a new stop record in
-normal mode.
+When user code records a call, checkpoint, call-end, or completion, it appends a
+new stop record in normal mode.
 
 ```mermaid
 flowchart TD
@@ -800,7 +843,7 @@ Before recording anything new, the timeline is truncated from `rewriteFrom`:
 ```text
 Array.Clear(records, rewriteFrom, recordCount - rewriteFrom)
 Array.Clear(recordRunners, rewriteFrom, ...)
-Array.Clear(stopIdsByRecord, rewriteFrom, ...)
+Array.Fill(stopIdsByRecord, -1, rewriteFrom, ...)
 recordCount = rewriteFrom
 mode = Normal
 ```
@@ -818,12 +861,12 @@ On child runner creation:
 ```text
 parent = PlaybackRuntime.CurrentRunner
 child.Depth = parent.Depth + 1
-child.CallRecordIndex = playback.AddCall(parent, "In")
+child.CallRecordIndex = playback.AddCall(parent, child, "In")
 parent.AddChild(child)
 ```
 
-The call record is structural.  It gives the timeline a hierarchy, but it is not
-a stop.
+The call record is a child-entry stop.  It gives the timeline a hierarchy and
+lets movement land before the child state machine starts.
 
 When the child finishes, its promise completes.  Since call-end is forced in the
 minimal model, completion records a `CallEnd` stop instead of immediately
@@ -847,14 +890,15 @@ flowchart TD
     Parent["Parent runner"]
     Await["await Child()"]
     ParentStop["Capture parent await stop"]
+    Call["Call stop"]
     Child["Child runner"]
     ChildCheckpoint["Child checkpoint stops"]
     ChildDone["Child SetResult"]
     CallEnd["CallEnd stop"]
     ParentResume["Resume parent await stop"]
 
-    Parent --> Await --> ParentStop
-    Await --> Child --> ChildCheckpoint --> ChildDone
+    Parent --> Await --> ParentStop --> Call
+    Call --> Child --> ChildCheckpoint --> ChildDone
     ChildDone --> CallEnd --> ParentResume
 ```
 
@@ -918,19 +962,20 @@ Important invariants:
 ```text
 Every Checkpoint record has:
   recordRunners[index] != null
-  stopIdsByRecord[index] != 0
+  stopIdsByRecord[index] != -1
 
 Every CallEnd record has:
   recordRunners[index] != null
-  stopIdsByRecord[index] != 0
+  stopIdsByRecord[index] != -1
 
 Every Completed record has:
   recordRunners[index] == null
-  stopIdsByRecord[index] == 0
+  stopIdsByRecord[index] == -1
 
-Call records are structural:
-  they do not require a stop id
-  they are not movement targets
+Call records:
+  recordRunners[index] points to the child runner
+  stopIdsByRecord[index] == -1
+  restore the child runner initial state
 
 During Replaying:
   each recorded operation must consume the next existing record
@@ -979,10 +1024,9 @@ no public extensibility model
 linear scan to find next/previous stop
 ```
 
-The linear scan is over timeline records.  Since non-stop records are structural
-call records, the practical cost is usually the number of structural records
-between stops, not the whole timeline size.  A stop index can be added later if
-structural density becomes a real problem.
+The linear scan is over timeline records.  Since calls are now stops too, the
+practical cost is usually the number of non-boundary records between movement
+targets.  A stop index can be added later if that becomes a real problem.
 
 ## Mental Model
 
