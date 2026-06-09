@@ -89,7 +89,7 @@ public sealed class MinimumPlaybackTests
         var playback1 = Playback.Create(_ => Scenario(6));
         var playback2 = Playback.Create(_ => Scenario(4));
 
-        for (var i = 0; i < 128 && (!playback1.IsCompleted || !playback2.IsCompleted); i++)
+        for (var i = 0; i < 512 && (!playback1.IsCompleted || !playback2.IsCompleted); i++)
         {
             var playback = (i & 1) == 0 ? playback1 : playback2;
             if (playback.IsCompleted)
@@ -130,6 +130,10 @@ public sealed class MinimumPlaybackTests
         await Assert.That(Joined(events)).IsEqualTo("start");
 
         await Assert.That(playback.TryMoveNext()).IsTrue();
+        await Assert.That(playback.Current?.Role).IsEqualTo(PlaybackRecordRole.Call);
+        await Assert.That(Joined(events)).IsEqualTo("start");
+
+        await Assert.That(playback.TryMoveNext()).IsTrue();
         await Assert.That(playback.Current?.Label).IsEqualTo("child");
         await Assert.That(Joined(events)).IsEqualTo("start,child");
 
@@ -140,6 +144,24 @@ public sealed class MinimumPlaybackTests
         await Assert.That(playback.TryMoveNext()).IsTrue();
         await Assert.That(playback.Current?.Label).IsEqualTo("end=7");
         await Assert.That(Joined(events)).IsEqualTo("start,child,parent:7");
+    }
+
+    [Test]
+    public async Task Call_StopsBeforeChildStarts()
+    {
+        var events = new List<string>();
+        var playback = Playback.Create(_ => CallEndScenario(events));
+
+        await Assert.That(playback.TryMoveNext()).IsTrue();
+        await Assert.That(Joined(events)).IsEqualTo("start");
+
+        await Assert.That(playback.TryMoveNext()).IsTrue();
+        await Assert.That(playback.Current?.Role).IsEqualTo(PlaybackRecordRole.Call);
+        await Assert.That(Joined(events)).IsEqualTo("start");
+
+        await Assert.That(playback.TryMoveNext()).IsTrue();
+        await Assert.That(playback.Current?.Label).IsEqualTo("child");
+        await Assert.That(Joined(events)).IsEqualTo("start,child");
     }
 
     [Test]

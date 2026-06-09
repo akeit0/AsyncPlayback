@@ -122,9 +122,15 @@ internal sealed class PlaybackTaskMethodBuilderCore
         runner = typedRunner;
         Promise.AttachRunner(runner);
         if (parent == null)
+        {
             playback.AttachRootRunner(runner);
+            typedRunner.SetInitial(ref stateMachine);
+            runner.MoveNext();
+            return;
+        }
+
         typedRunner.SetInitial(ref stateMachine);
-        runner.MoveNext();
+        playback.AddCall(parent, typedRunner, "In");
     }
 
     public void CaptureAwait<TAwaiter, TStateMachine>(

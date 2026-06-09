@@ -8,6 +8,7 @@ internal interface IPlaybackRunner
     int? CallRecordIndex { get; }
     int? CurrentRecordIndex { get; }
     void AddChild(IPlaybackRunner child);
+    void SetCallRecordIndex(int recordIndex);
     void MoveNext();
     void RestoreInitial();
     void RestoreStop(int stopId, int recordIndex);
@@ -36,12 +37,11 @@ internal sealed class PlaybackRunner<TStateMachine> : IPlaybackRunner
         this.promise = promise;
         this.parent = parent;
         Depth = parent == null ? 0 : parent.Depth + 1;
-        CallRecordIndex = parent == null ? null : playback.AddCall(parent, "In");
         parent?.AddChild(this);
     }
 
     public int Depth { get; }
-    public int? CallRecordIndex { get; }
+    public int? CallRecordIndex { get; private set; }
     public int? CurrentRecordIndex { get; private set; }
 
     public void SetInitial(ref TStateMachine stateMachine)
@@ -60,6 +60,11 @@ internal sealed class PlaybackRunner<TStateMachine> : IPlaybackRunner
     {
         EnsureChildCapacity();
         children[childCount++] = child;
+    }
+
+    public void SetCallRecordIndex(int recordIndex)
+    {
+        CallRecordIndex = recordIndex;
     }
 
     public void RestoreInitial()

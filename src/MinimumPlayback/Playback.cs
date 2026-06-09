@@ -98,18 +98,25 @@ public sealed class Playback
         return record.Index;
     }
 
-    internal int AddCall(IPlaybackRunner parent, string label)
+    internal int AddCall(IPlaybackRunner parent, IPlaybackRunner child, string label)
     {
         if (TryConsumeReplayRecord(PlaybackRecordRole.Call, label, out var replayRecord))
+        {
+            recordRunners[replayRecord.Index] = child;
+            child.SetCallRecordIndex(replayRecord.Index);
             return replayRecord.Index;
+        }
 
         TruncateIfRewriting();
-        return AddRecord(
+        var record = AddRecord(
             PlaybackRecordRole.Call,
             label,
             parent.Depth,
             parent.CallRecordIndex ?? -1
-        ).Index;
+        );
+        recordRunners[record.Index] = child;
+        child.SetCallRecordIndex(record.Index);
+        return record.Index;
     }
 
     internal int AddCallEnd(IPlaybackRunner runner, int stopId, int callRecordIndex)
@@ -216,6 +223,13 @@ public sealed class Playback
         }
 
         var record = records[recordIndex];
+        if (record.Role == PlaybackRecordRole.Call)
+        {
+            var runner = GetRunner(record);
+            runner.RestoreInitial();
+            return runner;
+        }
+
         if (record.Role == PlaybackRecordRole.CallEnd)
         {
             var runner = GetRunner(record);
@@ -344,6 +358,7 @@ public sealed class Playback
     {
         return record.Role
             is PlaybackRecordRole.Checkpoint
+                or PlaybackRecordRole.Call
                 or PlaybackRecordRole.CallEnd
                 or PlaybackRecordRole.Completed;
     }
