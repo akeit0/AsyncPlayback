@@ -66,7 +66,9 @@ done
 
 ## 基本モデル
 
-C# は `async` メソッドを `IAsyncStateMachine` に lowering します。生成された状態機械は、再開位置、ローカル変数、awaiter field、`MoveNext()` を持ちます。
+C# の async method は、多くの場合 compiler-generated な `IAsyncStateMachine` implementation に lowering されます。生成された状態機械は、再開位置、ローカル変数、awaiter field、`MoveNext()` を持ちます。
+
+.NET 11 では Runtime Async が導入されており、async method が必ずしも compiler-generated `IAsyncStateMachine` の形を経由するとは限りません。`MinimumPlayback` は custom async method builder と state-machine lowering path に依存しているため、この文書ではその path を説明します。
 
 `MinimumPlayback` は、この生成された状態機械を実行状態として扱います。ユーザーコードを解釈するのではなく、移動境界ごとに状態機械のスナップショットを保存し、その境界をタイムラインに記録します。
 

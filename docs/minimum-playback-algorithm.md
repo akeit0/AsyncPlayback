@@ -72,8 +72,14 @@ done
 
 ## 2. Core Model
 
-C# lowers an `async` method into an `IAsyncStateMachine`. That generated state
-machine owns the resume state, locals, awaiter fields, and a `MoveNext()` method.
+C# async methods are commonly lowered into compiler-generated
+`IAsyncStateMachine` implementations. That generated state machine owns the
+resume state, locals, awaiter fields, and a `MoveNext()` method.
+
+.NET 11 introduces Runtime Async, where an async method does not necessarily go
+through this compiler-generated `IAsyncStateMachine` shape. `MinimumPlayback`
+relies on the custom async method builder and state-machine lowering path, so
+this document describes that path.
 
 `MinimumPlayback` uses the generated state machine as executable state. It does
 not interpret user code. It stores snapshots of the state machine at known
