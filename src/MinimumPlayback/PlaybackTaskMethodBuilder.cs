@@ -125,7 +125,6 @@ internal sealed class PlaybackTaskMethodBuilderCore
         {
             playback.AttachRootRunner(runner);
             typedRunner.SetInitial(ref stateMachine);
-            runner.MoveNext();
             return;
         }
 

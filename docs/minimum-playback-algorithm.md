@@ -5,10 +5,10 @@ The goal is to describe the algorithm: how C# async state machines
 are captured, recorded as movement boundaries, moved forward, and replayed to
 move backward.
 
-`MinimumPlayback` is deliberately small. It has checkpoints, nested
+`MinimumPlayback` is a small experimental runtime for checkpoints, nested
 `PlaybackTask` calls, typed return values, call-entry and call-exit boundaries,
-root completion, and backward movement. It has no virtual time, scheduler,
-`ValueTask`, general `Task` semantics, or user data store.
+root completion, and backward movement. It does not model virtual time,
+scheduling, `ValueTask`, general `Task` semantics, or user data storage.
 
 ## 1. Example
 
@@ -80,7 +80,7 @@ not interpret user code. It stores snapshots of the state machine at known
 movement boundaries and records those boundaries in the timeline.
 
 The sample `ForScenario` is lowered into one generated state machine. Exact
-names differ by compiler, but the shape is what matters:
+names differ by compiler; simplified generated code looks like this:
 
 ```csharp
 [StructLayout(LayoutKind.Auto)]
@@ -151,7 +151,7 @@ private struct ForScenarioStateMachine : IAsyncStateMachine
 }
 ```
 
-The fields that matter in this example are:
+The generated state machine keeps these fields across calls to `MoveNext()`:
 
 | Field | Meaning |
 | --- | --- |
@@ -160,19 +160,20 @@ The fields that matter in this example are:
 | `checkpointAwaiter` | Awaiter contract for the suspended operation. `GetResult()` is the resume point after `await`: it propagates exceptions and returns the awaited value. `Checkpoint()` returns void, but typed child awaits use the same pattern to return `T`. |
 | `builder` | Custom builder that lets `MinimumPlayback` capture and resume execution. |
 
-Playback does not record console output. It records the places where execution
-can stop. For the example above, those stops are:
+Playback does not record side effects such as console output. It records
+boundaries where the generated state machine can be restored and resumed. For
+the example above, the timeline records are:
 
-| Stop | Why it exists |
+| Timeline record | Recorded when |
 | --- | --- |
-| `i == 0` checkpoint | `await Checkpoint()` suspended the generated state machine. |
-| `i == 1` checkpoint | The next loop iteration reached the same checkpoint await. |
-| `i == 2` checkpoint | The last loop iteration reached the same checkpoint await. |
-| `Completed` | The root async method finished. |
+| First checkpoint | `await Checkpoint()` suspends with `i == 0`. |
+| Second checkpoint | `await Checkpoint()` suspends with `i == 1`. |
+| Third checkpoint | `await Checkpoint()` suspends with `i == 2`. |
+| `Completed` | The root state machine calls `SetResult()`. |
 
-This ordered list of stop records is called the timeline in this document.
+This ordered record list is called the timeline in this document.
 
-For this example, the meaningful state is mostly `(state, i)`:
+For this example, each stop corresponds mainly to the pair `(state, i)`:
 
 | Boundary | `state` | `i` |
 | --- | ---: | --- |
@@ -182,7 +183,8 @@ For this example, the meaningful state is mostly `(state, i)`:
 | `stop2` | `0` | `2` |
 | `Completed` | `-2` | `3` |
 
-Direction changes timeline bookkeeping, not generated `MoveNext()` execution.
+Forward and backward movement differ in which timeline record is selected as
+the cursor. Generated `MoveNext()` still executes forward.
 
 ```mermaid
 flowchart TD
@@ -232,13 +234,12 @@ find the state-machine snapshot needed to run the next forward segment:
 | `CallEnd` | Parent runner and `runner.stops[stopId]`. |
 | `Completed` | No restore source; the root method already ended. |
 
-The record itself carries visible metadata such as role, label, depth, and
-parent index. The runner and stop id are stored beside it because they are
-runtime pointers for restore/replay, not display data.
+The record stores role, label, depth, and parent index. Runner and stop id are
+kept beside the record index as restore/replay data.
 
 ## 3. Nested Call and the Call Boundary
 
-`Call` is easiest to understand from a nested example:
+A nested `PlaybackTask` introduces `Call` and `CallEnd` records:
 
 ```csharp
 var playback = Playback.Create(_ => Nest(3, 3));
@@ -345,11 +346,8 @@ public readonly struct PlaybackTask<T>;
 ```
 
 The compiler-generated state machine calls the custom builder instead of
-`AsyncTaskMethodBuilder`. The real dispatch lives in
-`PlaybackTaskMethodBuilderCore`.
-
-The important part is not the builder API itself. The important part is where
-the generated state machine calls back into the runtime:
+`AsyncTaskMethodBuilder`. Those calls enter `PlaybackTaskMethodBuilderCore` and
+connect generated `MoveNext()` execution to playback runtime state:
 
 | Generated state-machine event | Builder/runtime path | Playback effect |
 | --- | --- | --- |
@@ -424,12 +422,12 @@ how a nested async method discovers its parent runner.
 
 Timeline records are produced by the callback flow above:
 
-| Record role | Produced from | Why it is a stop |
+| Record role | Produced from | Stop position |
 | --- | --- | --- |
-| `Checkpoint` | `AwaitUnsafeOnCompleted(...)` for `await Checkpoint()`. | User explicitly requested a movement boundary. |
-| `Call` | Builder start of a nested `PlaybackTask`. | Playback can stop before the child state machine begins. |
-| `CallEnd` | Child `SetResult(...)` or `SetException(...)`. | Playback can stop after the child completes and before parent continuation resumes. |
-| `Completed` | Root `SetResult(...)` or `SetException(...)`. | Playback can stop at root completion. |
+| `Checkpoint` | `AwaitUnsafeOnCompleted(...)` for `await Checkpoint()`. | After the checkpoint await suspends. |
+| `Call` | Builder start of a nested `PlaybackTask`. | Before the child state machine begins. |
+| `CallEnd` | Child `SetResult(...)` or `SetException(...)`. | After child completion, before parent continuation resumes. |
+| `Completed` | Root `SetResult(...)` or `SetException(...)`. | After root completion. |
 
 The stored record is small:
 
@@ -478,90 +476,47 @@ Parent/depth rules:
 
 ## 6. Moving Forward
 
-`Playback.Create(...)` is lazy. It stores the entry delegate but does not run
-user code. The first `TryMoveNext()` starts the root runner and runs until the
-first boundary is recorded.
+`Playback.Create(...)` stores the entry delegate. The root state machine starts
+on the first `TryMoveNext()`.
 
-If the next stop already exists, moving forward only advances the cursor:
+Forward movement restores or resumes from the current cursor and runs generated
+`MoveNext()` until the next timeline record is appended. The cursor then moves
+to that new record.
 
-| Step | Operation |
-| ---: | --- |
-| 1 | Find the next timeline stop after `cursor`. |
-| 2 | Set `cursor` to that record index. |
-| 3 | Set `Current` to that record. |
-
-If there is no recorded next stop and playback is not completed, the runtime
-restores or resumes from the current cursor and executes `MoveNext()` until a
-new record is appended.
-
-Cursor preparation:
-
-| Cursor | Preparation |
-| --- | --- |
-| `-1` | Restore root initial state and run `root.MoveNext()`. |
-| `Checkpoint` | Restore `runner.stops[stopId]` and run `runner.MoveNext()`. |
-| `Call` | Restore child runner initial state and run `child.MoveNext()`. |
-| `CallEnd` | Reset parent promise for replay and resume parent await stop. |
-| `Completed` | No forward segment exists. |
-
-If the previous backward move put playback in `Rewriting` mode, the next forward
-move first truncates records from `rewriteFrom`, fills cleared stop ids with
-`-1`, and then records a new future.
+After a backward step, the next forward movement first truncates the old future
+from `rewriteFrom`, then records a new future.
 
 ## 7. Moving Back
 
-`TryMoveBack()` never executes C# backward. It replays a forward segment while
-`IsForward == false`.
+Backward movement replays the previous forward segment with `IsForward == false`.
+C# still executes through generated `MoveNext()`.
 
-Algorithm:
-
-| Step | Operation |
-| ---: | --- |
-| 1 | Save the current cursor as `target`. |
-| 2 | Find the previous stop before `target`. |
-| 3 | Set `IsForward = false` and clear `IsCompleted`. |
-| 4 | Replay forward from `previous` through `target`. |
-| 5 | Enter `Rewriting` mode from `previous + 1`. |
-| 6 | Move `cursor` to `previous` and clear `Current`. |
-
-`ReplayExisting(previous, target)` sets replay mode, restores the runner for
-`previous`, runs forward, and consumes existing records from `previous + 1`
-through `target`.
-
-During replay, record creation methods consume existing records instead of
-appending:
-
-| Method | Replay behavior |
+| Phase | Runtime behavior |
 | --- | --- |
-| `AddCheckpoint` | Consume the next existing `Checkpoint`. |
-| `AddCall` | Consume the next existing `Call`. |
-| `AddCallEnd` | Consume the next existing `CallEnd`. |
-| `OnRootCompleted` | Consume the existing `Completed` record. |
+| Select segment. | Use the current cursor as `target` and find the previous timeline record. |
+| Restore. | Restore the snapshot for the previous record. |
+| Replay. | Run `MoveNext()` forward until the target record is reproduced. |
+| Move cursor. | Consume the reproduced target and move the cursor to the previous record. |
+| Prepare rewrite. | Mark records after the new cursor as future records to truncate on the next forward move. |
 
-Role and label must match. If replay does not consume exactly through `target`,
-the runtime throws because the state-machine execution no longer matches the
+During replay, each attempted record append must match the next existing record.
+A role or label mismatch means the state-machine execution no longer matches the
 timeline.
-
-After a successful backward step, the cursor points to `previous`, but the old
-future still exists in arrays. `Rewriting` mode means the next forward movement
-will truncate that future before recording anything new.
 
 ## 8. Typed Results, Exceptions, and Cloning
 
-`PlaybackTask<T>` stores its result in `PlaybackPromise<T>`, not in the task
-struct. The task struct is only a handle; the promise is the shared object
-between child completion and parent continuation.
+`PlaybackPromise<T>` carries a child result from child completion to the parent
+awaiter.
 
-During replay, a promise resets only completion state:
+Before replaying a child completion, the promise resets completion state:
 
 | Promise field | Replay reset |
 | --- | --- |
 | `completed` | `false` |
 | `exception` | `null` |
 
-The continuation runner and stop id remain linked, so the same replayed child
-completion can record the same `CallEnd` and later resume the same parent await
-state.
+The continuation runner and stop id remain linked, so replayed child completion
+records the same `CallEnd` and resumes the same parent await state.
 
 Exceptions are stored in the promise and thrown from `GetResult()`.
 
@@ -602,31 +557,15 @@ internal class CloneUtility
 }
 ```
 
-The clone is intentionally shallow. It is enough to copy compiler state-machine
-fields themselves, but it does not deep-copy arbitrary mutable objects referenced
-by locals.
+This is a shallow clone. It copies compiler state-machine fields, but it does
+not deep-copy arbitrary mutable objects referenced by locals.
 
-## 9. Constraints and Mental Model
-
-Constraints:
+## 9. Constraints
 
 | Constraint | Meaning |
 | --- | --- |
-| Single-threaded synchronous runtime | No concurrent scheduler model. |
-| No external scheduler | Movement happens only through playback calls. |
-| No `ValueTask` | Only `PlaybackTask` / `PlaybackTask<T>` are modeled. |
-| No general `Task` semantics | It is not a replacement for `Task`. |
-| One logical awaiter per `PlaybackTask` | A child task has one parent await site. |
-| Shallow clone only | Reference-type state machines are cloned shallowly. |
-| Linear stop lookup | Next/previous stop search scans timeline records. |
-
-Mental model:
-
-| Step | Meaning |
-| ---: | --- |
-| 1 | C# async method becomes a compiler state machine. |
-| 2 | `PlaybackRunner` snapshots that state machine. |
-| 3 | `Playback` records visible movement boundaries. |
-| 4 | `TryMoveNext` restores or resumes and runs `MoveNext()`. |
-| 5 | `TryMoveBack` restores the previous boundary and replays forward. |
-| 6 | `Rewriting` truncates the old future after a backward step. |
+| Single-threaded runtime | Movement is driven by explicit playback calls. |
+| `PlaybackTask` model | The runtime models `PlaybackTask` / `PlaybackTask<T>`, not `ValueTask` or general `Task`. |
+| One parent await site per child task | A child promise keeps one parent continuation. |
+| Shallow clone for reference-type state machines | Debug reference-type state machines are cloned shallowly. |
+| Linear timeline lookup | Next/previous record lookup scans timeline records. |

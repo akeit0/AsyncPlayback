@@ -2,7 +2,7 @@
 
 この文書では、`src/MinimumPlayback` の内部動作を説明します。C# の async 状態機械をどのように保存し、移動境界として記録し、前へ進め、後方移動のためにリプレイするのかを扱います。
 
-`MinimumPlayback` は、意図的に小さく作った実験的な実装です。扱うのは、checkpoint、ネストした `PlaybackTask` 呼び出し、型付き戻り値、call entry / call exit の境界、root completion、後方移動だけです。virtual time、scheduler、`ValueTask`、一般的な `Task` semantics、user data store は扱いません。
+`MinimumPlayback` は、checkpoint、ネストした `PlaybackTask` 呼び出し、型付き戻り値、call entry / call exit の境界、root completion、後方移動に絞った実験的な runtime です。virtual time、scheduling、`ValueTask`、一般的な `Task` semantics、user data storage は扱いません。
 
 ## 例
 
@@ -70,7 +70,7 @@ C# は `async` メソッドを `IAsyncStateMachine` に lowering します。生
 
 `MinimumPlayback` は、この生成された状態機械を実行状態として扱います。ユーザーコードを解釈するのではなく、移動境界ごとに状態機械のスナップショットを保存し、その境界をタイムラインに記録します。
 
-最初の `ForScenario` は、1つの生成状態機械に lowering されます。実際の名前は compiler によって変わりますが、重要なのはおおよそ次の形です。
+最初の `ForScenario` は、1つの生成状態機械に lowering されます。実際の名前は compiler によって変わりますが、簡略化した generated code は次の形です。
 
 ```csharp
 [StructLayout(LayoutKind.Auto)]
@@ -141,7 +141,7 @@ private struct ForScenarioStateMachine : IAsyncStateMachine
 }
 ```
 
-この例で見るべき field は多くありません。
+生成された状態機械は、`MoveNext()` の呼び出しをまたいで次の field を保持します。
 
 | Field | 意味 |
 | --- | --- |
@@ -150,18 +150,18 @@ private struct ForScenarioStateMachine : IAsyncStateMachine
 | `checkpointAwaiter` | 中断した await の契約を表す。`GetResult()` が `await` 後の再開点で、例外を伝播し、await 結果を返す。`Checkpoint()` の結果は void だが、typed child await では同じ形で `T` を返す。 |
 | `builder` | `MinimumPlayback` が実行の capture/resume に使う custom builder |
 
-Playback は console output を記録しません。実行が止まれる場所を記録します。上の例では、stop は次のようになります。
+Playback は console output のような副作用を記録しません。記録するのは、生成状態機械を restore/resume できる境界です。上の例では、timeline record は次のようになります。
 
-| Stop | 存在する理由 |
+| Timeline record | 記録されるタイミング |
 | --- | --- |
-| `i == 0` checkpoint | `await Checkpoint()` が生成された状態機械を suspend した。 |
-| `i == 1` checkpoint | 次の loop iteration が同じ checkpoint await に到達した。 |
-| `i == 2` checkpoint | 最後の loop iteration が同じ checkpoint await に到達した。 |
-| `Completed` | root async method が完了した。 |
+| First checkpoint | `i == 0` の状態で `await Checkpoint()` が suspend したとき |
+| Second checkpoint | `i == 1` の状態で `await Checkpoint()` が suspend したとき |
+| Third checkpoint | `i == 2` の状態で `await Checkpoint()` が suspend したとき |
+| `Completed` | root state machine が `SetResult()` を呼んだとき |
 
-この ordered stop record list を、この文書では timeline と呼びます。
+この ordered record list を、この文書では timeline と呼びます。
 
-この例で状態の差分として重要なのは、ほぼ `(state, i)` です。
+この例では、各 stop は主に `(state, i)` の組に対応します。
 
 | Boundary | `state` | `i` |
 | --- | ---: | --- |
@@ -171,7 +171,7 @@ Playback は console output を記録しません。実行が止まれる場所�
 | `stop2` | `0` | `2` |
 | `Completed` | `-2` | `3` |
 
-方向が変わっても、生成された `MoveNext()` は常に前向きに実行されます。変わるのは timeline の bookkeeping だけです。
+forward / backward の違いは、どの timeline record を cursor として選ぶかに現れます。生成された `MoveNext()` は常に前向きに実行されます。
 
 ```mermaid
 flowchart TD
@@ -220,11 +220,11 @@ timeline 用語:
 | `CallEnd` | parent runner と `runner.stops[stopId]` |
 | `Completed` | 復元元なし。root method はすでに終了している。 |
 
-record 自体は role、label、depth、parent index など、見える metadata を持ちます。runner と stop id は restore/replay 用の runtime pointer なので、表示用 record の横に保存します。
+record 自体は role、label、depth、parent index を持ちます。runner と stop id は restore/replay 用の関連データとして、record index と対応づけて保存します。
 
 ## ネスト呼び出しと Call 境界
 
-`Call` は、ネストした例を見ると分かりやすいです。
+ネストした `PlaybackTask` は `Call` と `CallEnd` record を作ります。
 
 ```csharp
 var playback = Playback.Create(_ => Nest(3, 3));
@@ -327,9 +327,7 @@ public readonly partial struct PlaybackTask;
 public readonly struct PlaybackTask<T>;
 ```
 
-compiler が生成する状態機械は `AsyncTaskMethodBuilder` ではなく、この custom builder を呼びます。実際の分岐は `PlaybackTaskMethodBuilderCore` にあります。
-
-重要なのは builder API 名そのものではありません。生成された状態機械が、どこで runtime に戻ってくるかです。
+compiler が生成する状態機械は `AsyncTaskMethodBuilder` ではなく、この custom builder を呼びます。その呼び出しは `PlaybackTaskMethodBuilderCore` に入り、生成された `MoveNext()` の実行と playback runtime state を接続します。
 
 | 生成状態機械で起きること | Builder/runtime path | Playback effect |
 | --- | --- | --- |
@@ -398,12 +396,12 @@ runner が `MoveNext()` を呼ぶとき、自分自身を `CurrentRunner` に入
 
 timeline record は、上の callback flow から作られます。
 
-| Record role | どこから作られるか | なぜ stop なのか |
+| Record role | 作られるタイミング | 停止位置 |
 | --- | --- | --- |
-| `Checkpoint` | `await Checkpoint()` の `AwaitUnsafeOnCompleted(...)`。 | user が明示的に移動境界を要求した。 |
-| `Call` | nested `PlaybackTask` の builder start。 | 子状態機械が始まる前に playback が止まれる。 |
-| `CallEnd` | child の `SetResult(...)` または `SetException(...)`。 | child 完了後、parent continuation 再開前に playback が止まれる。 |
-| `Completed` | root の `SetResult(...)` または `SetException(...)`。 | root completion に playback が止まれる。 |
+| `Checkpoint` | `await Checkpoint()` の `AwaitUnsafeOnCompleted(...)`。 | checkpoint await が suspend した直後。 |
+| `Call` | nested `PlaybackTask` の builder start。 | child state machine が始まる前。 |
+| `CallEnd` | child の `SetResult(...)` または `SetException(...)`。 | child completion 後、parent continuation 再開前。 |
+| `Completed` | root の `SetResult(...)` または `SetException(...)`。 | root completion 後。 |
 
 保存される record は小さい value record です。
 
@@ -450,72 +448,38 @@ parent/depth rules:
 
 ## 前方移動
 
-`Playback.Create(...)` は lazy です。entry delegate を保存するだけで、この時点ではユーザーコードを実行しません。最初の `TryMoveNext()` が root runner を開始し、最初の境界が記録されるまで進めます。
+`Playback.Create(...)` は entry delegate を保存します。root state machine は最初の `TryMoveNext()` で開始します。
 
-すでに次の stop が存在する場合、前方移動は cursor を進めるだけです。
+前方移動は、現在の cursor から復元または再開し、次の timeline record が追加されるまで生成された `MoveNext()` を実行します。その後、cursor は新しい record に移ります。
 
-| Step | 操作 |
-| ---: | --- |
-| 1 | `cursor` の次にある timeline stop を探す。 |
-| 2 | `cursor` をその record index にする。 |
-| 3 | `Current` をその record にする。 |
-
-記録済みの次 stop がなく、playback が completed でもない場合、runtime は現在の cursor から runner を復元または再開し、新しい record が追加されるまで `MoveNext()` を実行します。
-
-cursor preparation:
-
-| Cursor | 準備 |
-| --- | --- |
-| `-1` | root initial state を復元し、`root.MoveNext()` を実行する。 |
-| `Checkpoint` | `runner.stops[stopId]` を復元し、`runner.MoveNext()` を実行する。 |
-| `Call` | child runner initial state を復元し、`child.MoveNext()` を実行する。 |
-| `CallEnd` | replay 用に parent promise を reset し、parent await stop を再開する。 |
-| `Completed` | 前方に進む区間はない。 |
-
-前回の後方移動で `Rewriting` mode になっている場合、次の前方移動では、まず `rewriteFrom` 以降の record を truncate します。消した stop id を `-1` で埋めてから、新しい未来を記録します。
+後方移動の後に前へ進む場合は、まず `rewriteFrom` 以降の古い未来を truncate し、それから新しい未来を記録します。
 
 ## 後方移動
 
-`TryMoveBack()` は C# を逆実行しません。`IsForward == false` の状態で、前向きの区間を replay します。
+後方移動は、`IsForward == false` の状態で1つ前の前方区間を replay します。C# は生成された `MoveNext()` を通って前向きに実行されます。
 
-algorithm:
-
-| Step | 操作 |
-| ---: | --- |
-| 1 | 現在の cursor を `target` として保存する。 |
-| 2 | `target` の1つ前の stop を探す。 |
-| 3 | `IsForward = false` にし、`IsCompleted` を clear する。 |
-| 4 | `previous` から `target` まで前向きに replay する。 |
-| 5 | `previous + 1` から `Rewriting` mode に入る。 |
-| 6 | `cursor` を `previous` にし、`Current` を clear する。 |
-
-`ReplayExisting(previous, target)` は replay mode を設定し、`previous` 用の runner を復元して前方に実行します。その過程で、`previous + 1` から `target` までの既存 record を消費します。
-
-replay 中、record creation methods は append せず、既存 record を消費します。
-
-| Method | Replay behavior |
+| Phase | Runtime behavior |
 | --- | --- |
-| `AddCheckpoint` | 次の既存 `Checkpoint` を消費する。 |
-| `AddCall` | 次の既存 `Call` を消費する。 |
-| `AddCallEnd` | 次の既存 `CallEnd` を消費する。 |
-| `OnRootCompleted` | 既存の `Completed` record を消費する。 |
+| 区間を選ぶ。 | 現在の cursor を `target` とし、その1つ前の timeline record を探す。 |
+| 復元する。 | 1つ前の record に対応する snapshot を復元する。 |
+| replay する。 | `target` record が再現されるまで `MoveNext()` を前向きに実行する。 |
+| cursor を動かす。 | 再現された `target` を消費し、cursor を1つ前の record に移す。 |
+| rewrite を準備する。 | 新しい cursor より後ろの record を、次の前方移動で truncate する未来として扱う。 |
 
-role と label は一致していなければなりません。`target` まで正確に消費できなければ、状態機械の実行と timeline が一致していないということなので、例外を投げます。
-
-後方移動が成功すると、cursor は `previous` を指します。ただし、古い未来はまだ配列上に残っています。`Rewriting` mode は、次の前方移動でその未来を truncate してから新しく記録するための印です。
+replay 中に追加されようとする record は、次の既存 record と一致しなければなりません。role や label が違う場合、状態機械の実行と timeline が一致していません。
 
 ## 型付き結果、例外、Clone
 
-`PlaybackTask<T>` の結果は task struct ではなく `PlaybackPromise<T>` に保存します。task struct は handle であり、child completion と parent continuation の間で共有される実体は promise です。
+`PlaybackPromise<T>` は、child completion から parent awaiter へ typed result を渡します。
 
-replay 時、promise は completion state だけを戻します。
+child completion を replay する前に、promise の completion state を reset します。
 
 | Promise field | Replay reset |
 | --- | --- |
 | `completed` | `false` |
 | `exception` | `null` |
 
-continuation runner と stop id の link は残します。これにより、replay された child completion が同じ `CallEnd` を記録し、その後で同じ parent await state を再開できます。
+continuation runner と stop id の link は残します。これにより、replay された child completion は同じ `CallEnd` を記録し、同じ parent await state を再開できます。
 
 例外は promise に保存され、`GetResult()` から throw されます。
 
@@ -553,29 +517,14 @@ internal class CloneUtility
 }
 ```
 
-clone は意図的に shallow です。compiler state-machine field そのものをコピーするには十分ですが、local が参照している任意の mutable object までは deep copy しません。
+この clone は shallow clone です。compiler state-machine field はコピーしますが、local が参照している任意の mutable object までは deep copy しません。
 
-## 制約とメンタルモデル
-
-制約:
+## 制約
 
 | 制約 | 意味 |
 | --- | --- |
-| single-threaded synchronous runtime | 並行 scheduler model は持たない。 |
-| no external scheduler | 移動は playback API 呼び出しでだけ起きる。 |
-| no `ValueTask` | `PlaybackTask` / `PlaybackTask<T>` だけを扱う。 |
-| no general `Task` semantics | 通常の `Task` の代替ではない。 |
-| one logical awaiter per `PlaybackTask` | child task には1つの parent await site だけを想定する。 |
-| shallow clone only | reference-type state machine は shallow clone だけ行う。 |
-| linear stop lookup | next/previous stop は timeline record を線形 scan する。 |
-
-mental model:
-
-| Step | 意味 |
-| ---: | --- |
-| 1 | C# async method が compiler state machine になる。 |
-| 2 | `PlaybackRunner` がその state machine のスナップショットを取る。 |
-| 3 | `Playback` が見える移動境界を記録する。 |
-| 4 | `TryMoveNext` が restore/resume して `MoveNext()` を実行する。 |
-| 5 | `TryMoveBack` が1つ前の境界を復元し、現在の境界まで前向きに replay する。 |
-| 6 | `Rewriting` が、後方移動後に残った古い未来を truncate する。 |
+| single-threaded runtime | 移動は明示的な playback call によって進む。 |
+| `PlaybackTask` model | `PlaybackTask` / `PlaybackTask<T>` を扱い、`ValueTask` や一般的な `Task` は扱わない。 |
+| child task ごとに1つの parent await site | child promise は1つの parent continuation を保持する。 |
+| reference-type state machine は shallow clone | Debug の reference-type state machine は shallow clone する。 |
+| linear timeline lookup | next/previous record lookup は timeline record を scan する。 |

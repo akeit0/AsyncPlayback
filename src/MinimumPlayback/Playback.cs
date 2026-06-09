@@ -43,11 +43,10 @@ public sealed class Playback
         if (mode == PlaybackMode.Rewriting)
             return RewriteNext();
 
-        var next = FindNextStop(cursor);
-        if (next < 0 && !TryRecordNext())
+        if (!TryRecordNext())
             return false;
 
-        next = FindNextStop(cursor);
+        var next = FindNextStop(cursor);
         if (next < 0)
             return false;
 
